@@ -417,13 +417,48 @@ class ProScreenRecorderApp(ctk.CTk):
 
         # Live VU Meter Bar
         vu_row = ctk.CTkFrame(card, fg_color="transparent")
-        vu_row.pack(fill="x", padx=16, pady=(6, 12))
+        vu_row.pack(fill="x", padx=16, pady=(6, 4))
 
         ctk.CTkLabel(vu_row, text="Mức âm:", font=("Segoe UI", 11), text_color="#64748b").pack(side="left", padx=(0, 8))
 
         self.mic_vu_canvas = tk.Canvas(vu_row, height=12, bg="#0f172a", highlightthickness=0)
         self.mic_vu_canvas.pack(side="left", fill="x", expand=True)
         self.mic_vu_bar = self.mic_vu_canvas.create_rectangle(0, 0, 0, 12, fill="#10b981", width=0)
+
+        # Status text for mic level and testing guidance
+        self.lbl_mic_status = ctk.CTkLabel(
+            card,
+            text="💡 Mẹo: Nhấn 'Thử Micro' để kiểm tra sóng âm và chỉnh độ to trước khi quay.",
+            font=("Segoe UI", 11), text_color="#64748b", anchor="w"
+        )
+        self.lbl_mic_status.pack(fill="x", padx=16, pady=(2, 6))
+
+        # Test Mic Action Controls
+        test_row = ctk.CTkFrame(card, fg_color="transparent")
+        test_row.pack(fill="x", padx=16, pady=(0, 12))
+
+        self.btn_test_mic = ctk.CTkButton(
+            test_row, text="🎤 Bật Thử Mic", width=125, height=28,
+            fg_color="#0284c7", hover_color="#0369a1",
+            corner_radius=7, font=("Segoe UI", 11, "bold"),
+            command=self._toggle_test_mic
+        )
+        self.btn_test_mic.pack(side="left", padx=(0, 8))
+
+        self.btn_test_sample = ctk.CTkButton(
+            test_row, text="🎧 Ghi & Nghe lại 3s", width=145, height=28,
+            fg_color="#334155", hover_color="#475569",
+            corner_radius=7, font=("Segoe UI", 11),
+            command=self._start_sample_test
+        )
+        self.btn_test_sample.pack(side="left", padx=(0, 12))
+
+        self.chk_live_monitor = ctk.CTkCheckBox(
+            test_row, text="Nghe trực tiếp qua loa/tai nghe",
+            font=("Segoe UI", 11), text_color="#94a3b8",
+            command=self._on_live_monitor_toggled
+        )
+        self.chk_live_monitor.pack(side="left")
 
     def _build_capture_settings_card(self):
         card = ctk.CTkFrame(self.main_scroll, fg_color="#161e2e", corner_radius=14, border_width=1, border_color="#1f2937")
@@ -598,20 +633,175 @@ class ProScreenRecorderApp(ctk.CTk):
 
     # --- Event Handlers & State Management ---
 
+    def _toggle_test_mic(self):
+        if self.engine.state in ("recording", "paused"):
+            return
+        if self.engine.audio_mgr.is_testing:
+            self._stop_test_mic()
+        else:
+            self._start_test_mic()
+
+    def _start_test_mic(self):
+        if not self.settings.record_mic:
+            self.switch_mic.select()
+            self._on_mic_switch_changed()
+
+        idx = self.mic_map.get(self.combo_mic.get())
+        vol = getattr(self.settings, "mic_volume", 1.0)
+        live_play = bool(self.chk_live_monitor.get())
+
+        try:
+            self.engine.audio_mgr.start_test_monitor(
+                mic_index=idx,
+                volume=vol,
+                live_playback=live_play,
+                on_rms=self._on_test_rms_received
+            )
+            self.btn_test_mic.configure(text="⏹ Dừng Thử Mic", fg_color="#dc2626", hover_color="#b91c1c")
+            self.lbl_mic_status.configure(
+                text="● Đang thử mic: Hãy nói vào micro để kiểm tra sóng âm...",
+                text_color="#38bdf8"
+            )
+        except Exception as e:
+            messagebox.showwarning("Lỗi Micro", f"Không thể bật thử micro: {e}", parent=self)
+
+    def _stop_test_mic(self):
+        self.engine.audio_mgr.stop_test_monitor()
+        try:
+            self.btn_test_mic.configure(text="🎤 Bật Thử Mic", fg_color="#0284c7", hover_color="#0369a1")
+            self.lbl_mic_status.configure(
+                text="💡 Mẹo: Nhấn 'Thử Micro' để kiểm tra sóng âm và chỉnh độ to trước khi quay.",
+                text_color="#64748b"
+            )
+            self.mic_vu_canvas.coords(self.mic_vu_bar, 0, 0, 0, 12)
+        except Exception:
+            pass
+
+    def _on_test_rms_received(self, rms):
+        def _apply():
+            if not self.winfo_exists() or not self.engine.audio_mgr.is_testing:
+                return
+            canvas_w = self.mic_vu_canvas.winfo_width()
+            if canvas_w > 10:
+                bar_w = int(max(0.0, min(1.0, rms)) * canvas_w)
+                if rms < 0.70:
+                    color = "#10b981"
+                    status_desc = f"Tín hiệu tốt ({int(rms * 100)}%)"
+                    status_col = "#34d399"
+                elif rms < 0.88:
+                    color = "#f59e0b"
+                    status_desc = f"Âm lượng khá lớn ({int(rms * 100)}%)"
+                    status_col = "#fbbf24"
+                else:
+                    color = "#ef4444"
+                    status_desc = f"Quá to / Nguy cơ rè ({int(rms * 100)}%) - Nên giảm thanh khuếch đại"
+                    status_col = "#f87171"
+
+                if rms < 0.05:
+                    status_desc = "Âm lượng nhỏ hoặc chưa nói... (Hãy nói thử vào mic)"
+                    status_col = "#94a3b8"
+
+                self.mic_vu_canvas.coords(self.mic_vu_bar, 0, 0, bar_w, 12)
+                self.mic_vu_canvas.itemconfig(self.mic_vu_bar, fill=color)
+                self.lbl_mic_status.configure(text=f"● Đang thử mic: {status_desc}", text_color=status_col)
+
+        self.after(0, _apply)
+
+    def _on_live_monitor_toggled(self):
+        enable = bool(self.chk_live_monitor.get())
+        idx = self.mic_map.get(self.combo_mic.get())
+        self.engine.audio_mgr.set_test_live_playback(enable, mic_index=idx)
+
+    def _start_sample_test(self):
+        if self.engine.state in ("recording", "paused"):
+            return
+
+        self._stop_test_mic()
+
+        if not self.settings.record_mic:
+            self.switch_mic.select()
+            self._on_mic_switch_changed()
+
+        self.btn_test_sample.configure(state="disabled", text="⏳ Đang chuẩn bị...")
+        self.btn_test_mic.configure(state="disabled")
+
+        idx = self.mic_map.get(self.combo_mic.get())
+        vol = getattr(self.settings, "mic_volume", 1.0)
+
+        def _progress(status, remaining, rms):
+            self.after(0, lambda: self._on_sample_test_progress(status, remaining, rms))
+
+        def _finish(success, message):
+            self.after(0, lambda: self._on_sample_test_finish(success, message))
+
+        self.engine.audio_mgr.test_record_and_playback_sample(
+            mic_index=idx,
+            volume=vol,
+            duration=3.0,
+            on_progress=_progress,
+            on_finish=_finish
+        )
+
+    def _on_sample_test_progress(self, status, remaining, rms):
+        if not self.winfo_exists():
+            return
+        canvas_w = self.mic_vu_canvas.winfo_width()
+        if canvas_w > 10:
+            bar_w = int(max(0.0, min(1.0, rms)) * canvas_w)
+            color = "#10b981" if rms < 0.85 else "#ef4444"
+            self.mic_vu_canvas.coords(self.mic_vu_bar, 0, 0, bar_w, 12)
+            self.mic_vu_canvas.itemconfig(self.mic_vu_bar, fill=color)
+
+        if status == "recording":
+            self.btn_test_sample.configure(text=f"🔴 Nói thử: {remaining:.1f}s", fg_color="#dc2626")
+            self.lbl_mic_status.configure(
+                text=f"🔴 Đang thu âm 3s: Hãy nói thử câu chào 'Alo 1, 2, 3' ({remaining:.1f}s còn lại)...",
+                text_color="#ef4444"
+            )
+        elif status == "playing":
+            self.btn_test_sample.configure(text=f"🔊 Phát lại: {remaining:.1f}s", fg_color="#0284c7")
+            self.lbl_mic_status.configure(
+                text=f"🔊 Đang phát lại qua loa ({remaining:.1f}s): Bạn hãy lắng nghe độ trong trẻo và âm lượng...",
+                text_color="#38bdf8"
+            )
+
+    def _on_sample_test_finish(self, success, message):
+        if not self.winfo_exists():
+            return
+        self.btn_test_sample.configure(state="normal", text="🎧 Ghi & Nghe lại 3s", fg_color="#334155")
+        self.btn_test_mic.configure(state="normal")
+        self.mic_vu_canvas.coords(self.mic_vu_bar, 0, 0, 0, 12)
+        if success:
+            self.lbl_mic_status.configure(
+                text="✅ Đã kiểm tra xong! Nếu bạn nghe giọng rõ ràng, bạn đã sẵn sàng bấm quay video.",
+                text_color="#10b981"
+            )
+        else:
+            self.lbl_mic_status.configure(
+                text=f"⚠️ Thử mic không hoàn tất: {message}",
+                text_color="#f59e0b"
+            )
+
     def _on_mic_switch_changed(self):
         enabled = bool(self.switch_mic.get())
         self.settings.record_mic = enabled
         self.settings.save()
+        if not enabled and self.engine.audio_mgr.is_testing:
+            self._stop_test_mic()
 
     def _on_mic_device_changed(self, choice):
         idx = self.mic_map.get(choice)
         self.settings.mic_device_index = idx
         self.settings.save()
+        if self.engine.audio_mgr.is_testing:
+            self._start_test_mic()
 
     def _on_mic_volume_changed(self, value):
         self.settings.mic_volume = round(float(value), 2)
         self.lbl_vol_val.configure(text=f"{int(self.settings.mic_volume * 100)}%")
         self.settings.save()
+        if self.engine.audio_mgr.is_testing:
+            self.engine.audio_mgr.set_test_volume(self.settings.mic_volume)
 
     def _on_area_mode_changed(self, choice):
         if choice == "Chọn vùng quay":
@@ -723,6 +913,7 @@ class ProScreenRecorderApp(ctk.CTk):
             self.stop_recording()
 
     def start_recording(self):
+        self._stop_test_mic()
         self._hide_toast()
         cd = getattr(self.settings, "countdown_seconds", 3)
         if cd > 0:
@@ -966,6 +1157,7 @@ class ProScreenRecorderApp(ctk.CTk):
 
     def quit_app(self):
         """Clean teardown and full exit."""
+        self._stop_test_mic()
         self.hotkeys.stop()
         if self.floating_bar and self.floating_bar.winfo_exists():
             self.floating_bar.destroy()

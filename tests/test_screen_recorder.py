@@ -68,6 +68,38 @@ class TestAudioManager(unittest.TestCase):
         finally:
             mgr.close()
 
+    def test_mic_test_monitor(self):
+        import time
+        mgr = AudioManager()
+        try:
+            rms_vals = []
+            ok = mgr.start_test_monitor(volume=1.5, on_rms=lambda r: rms_vals.append(r))
+            self.assertTrue(ok)
+            self.assertTrue(mgr.is_testing)
+            mgr.set_test_volume(1.8)
+            self.assertEqual(mgr.test_volume, 1.8)
+            time.sleep(0.2)
+            mgr.stop_test_monitor()
+            self.assertFalse(mgr.is_testing)
+        finally:
+            mgr.close()
+
+    def test_mic_sample_test(self):
+        import time
+        mgr = AudioManager()
+        try:
+            done = [False]
+            def on_finish(ok, msg):
+                done[0] = True
+            ok = mgr.test_record_and_playback_sample(duration=0.3, on_finish=on_finish)
+            self.assertTrue(ok)
+            t0 = time.time()
+            while not done[0] and time.time() - t0 < 3.0:
+                time.sleep(0.05)
+            self.assertTrue(done[0])
+        finally:
+            mgr.close()
+
 
 class TestRecorderEngine(unittest.TestCase):
     def test_region_formatting(self):
