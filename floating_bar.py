@@ -5,7 +5,7 @@ import customtkinter as ctk
 from desktop_support import exclude_from_capture
 
 
-class FloatingBar(ctk.CTkToplevel):
+class FloatingBar(tk.Toplevel):
     def __init__(self, parent, on_pause, on_resume, on_stop, on_restore):
         super().__init__(parent)
         self.on_pause = on_pause
@@ -15,7 +15,7 @@ class FloatingBar(ctk.CTkToplevel):
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(fg_color="#0f172a")
+        self.configure(bg="#0f172a")
 
         # Initial geometry (bottom center or top right)
         sw = self.winfo_screenwidth()
@@ -25,27 +25,33 @@ class FloatingBar(ctk.CTkToplevel):
         self.geometry(f"{w}x{h}+{x}+{y}")
         exclude_from_capture(self)
 
-        # Native Windows dragging support
-        self.bind("<ButtonPress-1>", self._start_native_drag)
+        self._drag_start_x = 0
+        self._drag_start_y = 0
+        self._win_start_x = 0
+        self._win_start_y = 0
 
         container = ctk.CTkFrame(self, fg_color="#1e293b", corner_radius=12, border_width=1, border_color="#334155")
         container.pack(fill="both", expand=True, padx=2, pady=2)
-        container.bind("<ButtonPress-1>", self._start_native_drag)
+        container.bind("<ButtonPress-1>", self._start_drag)
+        container.bind("<B1-Motion>", self._on_drag)
 
         # Pulse Record indicator
         self.dot = ctk.CTkLabel(container, text="●", text_color="#ef4444", font=("Segoe UI", 18, "bold"), width=24)
         self.dot.pack(side="left", padx=(10, 4))
-        self.dot.bind("<ButtonPress-1>", self._start_native_drag)
+        self.dot.bind("<ButtonPress-1>", self._start_drag)
+        self.dot.bind("<B1-Motion>", self._on_drag)
 
         # Timer label
         self.timer_label = ctk.CTkLabel(container, text="00:00", font=("Consolas", 15, "bold"), text_color="#f8fafc", width=60)
         self.timer_label.pack(side="left", padx=2)
-        self.timer_label.bind("<ButtonPress-1>", self._start_native_drag)
+        self.timer_label.bind("<ButtonPress-1>", self._start_drag)
+        self.timer_label.bind("<B1-Motion>", self._on_drag)
 
         # Mic meter bar (compact mini visualizer)
         self.mic_canvas = tk.Canvas(container, width=32, height=14, bg="#0f172a", highlightthickness=0)
         self.mic_canvas.pack(side="left", padx=6)
-        self.mic_canvas.bind("<ButtonPress-1>", self._start_native_drag)
+        self.mic_canvas.bind("<ButtonPress-1>", self._start_drag)
+        self.mic_canvas.bind("<B1-Motion>", self._on_drag)
         self.mic_bar = self.mic_canvas.create_rectangle(0, 0, 0, 14, fill="#10b981", width=0)
 
         # Pause / Resume button
@@ -79,16 +85,16 @@ class FloatingBar(ctk.CTkToplevel):
         self._pulse_state = True
         self._pulse_timer()
 
-    def _start_native_drag(self, event):
-        """Native Windows move loop (WM_NCLBUTTONDOWN) via DWM for 100% smooth, stable dragging."""
-        try:
-            hwnd = self.winfo_id()
-            top_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd
-            ctypes.windll.user32.ReleaseCapture()
-            ctypes.windll.user32.SendMessageW(top_hwnd, 0xA1, 2, 0)  # WM_NCLBUTTONDOWN = 0xA1, HTCAPTION = 2
-        except Exception:
-            pass
-        return "break"
+    def _start_drag(self, event):
+        self._drag_start_x = event.x_root
+        self._drag_start_y = event.y_root
+        self._win_start_x = self.winfo_x()
+        self._win_start_y = self.winfo_y()
+
+    def _on_drag(self, event):
+        dx = event.x_root - self._drag_start_x
+        dy = event.y_root - self._drag_start_y
+        self.geometry(f"+{self._win_start_x + dx}+{self._win_start_y + dy}")
 
     def _pulse_timer(self):
         if not self.winfo_exists():

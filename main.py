@@ -1,6 +1,7 @@
 """Pro Screen Recorder - Siêu Nhẹ & Đỉnh Cao Cho Windows.
 Quay màn hình phần cứng GPU, khay hệ thống, hiệu ứng chuyển động, âm thanh thông báo.
 """
+import ctypes
 import os
 import subprocess
 import sys
@@ -70,8 +71,8 @@ class ProScreenRecorderApp(ctk.CTk):
         )
         self.hotkeys.start()
 
-        # Build UI in a scrollable frame
-        self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="#0b0f19")
+        # Build UI in a main container frame
+        self.main_scroll = ctk.CTkFrame(self, fg_color="#0b0f19", corner_radius=0)
         self.main_scroll.pack(fill="both", expand=True)
 
         self._build_header()
@@ -1150,21 +1151,6 @@ class ProScreenRecorderApp(ctk.CTk):
             self.hide_to_tray()
         else:
             self.quit_app()
-
-    def _poll_wakeup_event(self):
-        """Restore window smoothly when user double-clicks desktop shortcut while running."""
-        if hasattr(self, "_wakeup_event") and self._wakeup_event:
-            try:
-                if ctypes.windll.kernel32.WaitForSingleObject(self._wakeup_event, 0) == 0:
-                    self.show_from_tray()
-                    self.lift()
-                    self.focus_force()
-                    self.attributes("-topmost", True)
-                    self.after(250, lambda: self.attributes("-topmost", False))
-            except Exception:
-                pass
-        if self.winfo_exists():
-            self.after(400, self._poll_wakeup_event)
 
     def quit_app(self):
         """Clean teardown and full exit."""
