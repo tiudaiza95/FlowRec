@@ -110,19 +110,28 @@ class AudioManager:
                 time.sleep(0.05)
                 continue
             try:
-                data = self.stream.read(1024, exception_on_overflow=False)
-                if has_custom_vol:
-                    try:
-                        arr = np.frombuffer(data, dtype=np.int16)
-                        data = np.clip(arr * vol, -32768, 32767).astype(np.int16).tobytes()
-                    except Exception:
-                        pass
-                self.frames.append(data)
+                available = 0
+                try:
+                    available = self.stream.get_read_available()
+                except Exception:
+                    pass
 
-                # Vectorized RMS calculated once every 4 chunks (~10 Hz) to eliminate CPU overhead
-                chunk_count += 1
-                if chunk_count % 4 == 0:
-                    self._calculate_rms_fast(data)
+                if available > 0:
+                    read_len = min(1024, available)
+                    data = self.stream.read(read_len, exception_on_overflow=False)
+                    if has_custom_vol:
+                        try:
+                            arr = np.frombuffer(data, dtype=np.int16)
+                            data = np.clip(arr * vol, -32768, 32767).astype(np.int16).tobytes()
+                        except Exception:
+                            pass
+                    self.frames.append(data)
+
+                    chunk_count += 1
+                    if chunk_count % 4 == 0:
+                        self._calculate_rms_fast(data)
+                else:
+                    time.sleep(0.01)
             except Exception:
                 break
         self.current_rms = 0.0
@@ -159,12 +168,15 @@ class AudioManager:
     def stop_and_save(self, wav_path):
         self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.5)
             self._thread = None
 
         if self.stream:
             try:
                 self.stream.stop_stream()
+            except Exception:
+                pass
+            try:
                 self.stream.close()
             except Exception:
                 pass
@@ -178,14 +190,16 @@ class AudioManager:
             return False
 
         try:
-            wf = wave.open(str(wav_path), "wb")
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(2)  # paInt16
-            wf.setframerate(self.sample_rate)
-            wf.writeframes(b"".join(self.frames))
-            wf.close()
-            return True
-        except Exception:
+            wav_path = Path(wav_path)
+            wav_path.parent.mkdir(parents=True, exist_ok=True)
+            with wave.open(str(wav_path), "wb") as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(2)  # paInt16
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(b"".join(self.frames))
+            return wav_path.is_file() and wav_path.stat().st_size > 44
+        except Exception as e:
+            print(f"Error saving audio WAV: {e}")
             return False
 
     # --- Live Microphone Test & Monitor Features ---

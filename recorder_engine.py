@@ -241,6 +241,30 @@ class RecorderEngine:
         self.capture_region = None  # None for full screen, or (left, top, width, height)
         self._excluded_rect_provider = None
 
+    def recover_orphaned_recordings(self):
+        """Auto-recovers any leftover ~temp_v_*.mp4 files from previous interrupted sessions."""
+        try:
+            out_dir = Path(self.settings.output_dir)
+            if not out_dir.is_dir():
+                return []
+            recovered = []
+            for temp_v in list(out_dir.glob("~temp_v_*.mp4")):
+                try:
+                    if time.time() - temp_v.stat().st_mtime > 10:
+                        stem = temp_v.stem.replace("~temp_v_", "")
+                        rec_path = out_dir / f"REC_{stem}.mp4"
+                        if not rec_path.exists():
+                            try:
+                                temp_v.replace(rec_path)
+                            except Exception:
+                                shutil.move(str(temp_v), str(rec_path))
+                            recovered.append(str(rec_path))
+                except Exception:
+                    pass
+            return recovered
+        except Exception:
+            return []
+
     def set_excluded_rect_provider(self, provider):
         self._excluded_rect_provider = provider
 
@@ -410,6 +434,18 @@ class RecorderEngine:
                             pass
                     self._work_queue.task_done()
         finally:
+            # Drain remaining items so work_queue can never block or deadlock
+            while not self._work_queue.empty():
+                try:
+                    buf = self._work_queue.get_nowait()
+                    if self._frame_pool is not None:
+                        try:
+                            self._frame_pool.put_nowait(buf)
+                        except Exception:
+                            pass
+                    self._work_queue.task_done()
+                except Exception:
+                    break
             try:
                 v_proc.stdin.close()
                 v_proc.wait(timeout=5.0)
@@ -581,17 +617,15 @@ class RecorderEngine:
         self._stop_event.set()
         self._pause_event.clear()
 
-        # Stop frame capture
+        # Stop frame capture first so no new frames are queued
         if self._record_thread:
-            self._record_thread.join(timeout=6.0)
+            self._record_thread.join(timeout=3.0)
             self._record_thread = None
 
-        # Wait for pipe writer to drain buffered frames
-        if self._work_queue:
-            try:
-                self._work_queue.join()
-            except Exception:
-                pass
+        # Drain buffered frames (bounded 3.0s timeout max, never hang)
+        t_drain = time.perf_counter()
+        while self._work_queue and not self._work_queue.empty() and (time.perf_counter() - t_drain < 3.0):
+            time.sleep(0.05)
 
         if self._writer_thread:
             self._writer_thread.join(timeout=5.0)
@@ -604,7 +638,11 @@ class RecorderEngine:
         # Stop audio
         has_audio = False
         if self.settings.record_mic and self.temp_audio_path:
-            has_audio = self.audio_mgr.stop_and_save(self.temp_audio_path)
+            try:
+                has_audio = self.audio_mgr.stop_and_save(self.temp_audio_path)
+            except Exception as e:
+                print(f"Error stopping audio: {e}")
+                has_audio = False
 
         # Mux video and audio
         final_file = self._mux_recording(has_audio)
@@ -649,6 +687,7 @@ class RecorderEngine:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=True,
+                timeout=30.0,
                 creationflags=NO_WINDOW
             )
             self._clean_temp_files()

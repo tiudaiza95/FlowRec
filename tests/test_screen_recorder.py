@@ -154,6 +154,21 @@ class TestRecorderEngine(unittest.TestCase):
             engine.audio_mgr.close()
 
 
+    def test_recover_orphaned_recordings(self):
+        import tempfile, time
+        with tempfile.TemporaryDirectory() as td:
+            s = Settings()
+            s.output_dir = td
+            engine = RecorderEngine(s)
+            temp_v = Path(td) / "~temp_v_20261105_120000.mp4"
+            temp_v.write_bytes(b"\x00" * 100)
+            os.utime(str(temp_v), (time.time() - 30, time.time() - 30))
+            recovered = engine.recover_orphaned_recordings()
+            self.assertEqual(len(recovered), 1)
+            self.assertTrue(Path(td, "REC_20261105_120000.mp4").is_file())
+            self.assertFalse(temp_v.exists())
+
+
 class TestSingleInstance(unittest.TestCase):
     def test_single_instance(self):
         lock1 = SingleInstance("Local\\TestMutexUnique.Instance")

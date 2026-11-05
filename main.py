@@ -1021,7 +1021,11 @@ class ProScreenRecorderApp(ctk.CTk):
                 pass
 
         def _do_stop():
-            final_file = self.engine.stop()
+            try:
+                final_file = self.engine.stop()
+            except Exception as e:
+                print(f"Error in engine.stop: {e}")
+                final_file = None
             self.after(0, lambda: self._on_stop_complete(final_file))
 
         threading.Thread(target=_do_stop, daemon=True).start()
