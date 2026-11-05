@@ -1,11 +1,13 @@
 """Recordings Library Window: View, Play, Open Folder, and Manage recordings."""
 import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
+from desktop_support import set_dark_titlebar
 
 
 class LibraryWindow(ctk.CTkToplevel):
@@ -18,6 +20,19 @@ class LibraryWindow(ctk.CTkToplevel):
         self.geometry("740x500")
         self.minsize(600, 400)
         self.configure(fg_color="#0f172a")
+
+        icon_path = Path(__file__).parent / "assets" / "icon.ico"
+        if icon_path.is_file():
+            try:
+                self.iconbitmap(str(icon_path))
+            except Exception:
+                pass
+        set_dark_titlebar(self)
+
+        def _on_throttle(e):
+            if e.widget == self:
+                time.sleep(0.012)
+        self.bind("<Configure>", _on_throttle)
 
         # Header
         header = ctk.CTkFrame(self, fg_color="#1e293b", height=60, corner_radius=0)

@@ -9,13 +9,13 @@ import customtkinter as ctk
 from desktop_support import exclude_from_capture
 
 
-class NotificationPill(ctk.CTkToplevel):
+class NotificationPill(tk.Toplevel):
     def __init__(self, parent, text="⏳ Đang lưu bản ghi...", is_loading=True, file_path=None):
         super().__init__(parent)
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(fg_color="#0f172a")
+        self.configure(bg="#0f172a")
         exclude_from_capture(self)
 
         self.file_path = file_path
