@@ -570,14 +570,21 @@ class RecorderEngine:
                 last_frame_count = self.frames_captured
                 last_calc_time = now
 
-            # Query disk file size only once every 1.0s to avoid disk I/O contention
-            if now - last_disk_check_time >= 1.0:
+            # Query disk file size and monitor free disk space every 1.5s
+            low_disk = False
+            if now - last_disk_check_time >= 1.5:
                 last_disk_check_time = now
                 if self.temp_video_path and self.temp_video_path.is_file():
                     try:
                         cached_size_bytes = self.temp_video_path.stat().st_size
                     except Exception:
                         pass
+                try:
+                    free_bytes = shutil.disk_usage(str(self.settings.output_dir)).free
+                    if free_bytes < 150 * 1024 * 1024:  # Less than 150 MB free
+                        low_disk = True
+                except Exception:
+                    pass
 
             mic_rms = self.audio_mgr.current_rms if self.settings.record_mic else 0.0
 
@@ -587,7 +594,8 @@ class RecorderEngine:
                     "elapsed": max(0.0, elapsed),
                     "fps": round(self.current_fps, 1),
                     "size_bytes": cached_size_bytes,
-                    "mic_rms": mic_rms
+                    "mic_rms": mic_rms,
+                    "low_disk": low_disk
                 })
 
     def pause(self):

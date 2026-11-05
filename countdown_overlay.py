@@ -5,10 +5,11 @@ from desktop_support import exclude_from_capture
 
 
 class CountdownOverlay:
-    def __init__(self, seconds=3, on_finish=None, on_cancel=None):
+    def __init__(self, seconds=3, on_finish=None, on_cancel=None, parent=None):
         self.count = seconds
         self.on_finish = on_finish
         self.on_cancel = on_cancel
+        self.parent = parent
         self.root = None
         self.label = None
 
@@ -17,7 +18,12 @@ class CountdownOverlay:
         vw = u32.GetSystemMetrics(0)
         vh = u32.GetSystemMetrics(1)
 
-        self.root = tk.Tk()
+        is_standalone = self.parent is None
+        if self.parent:
+            self.root = tk.Toplevel(self.parent)
+        else:
+            self.root = tk.Tk()
+
         self.root.overrideredirect(True)
         self.root.geometry(f"{vw}x{vh}+0+0")
         self.root.attributes("-alpha", 0.75)
@@ -77,18 +83,25 @@ class CountdownOverlay:
 
         self.root.after(1000, _tick)
         self.root.focus_force()
-        self.root.mainloop()
+        if is_standalone:
+            self.root.mainloop()
 
     def _done(self):
         if self.root:
-            self.root.destroy()
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
             self.root = None
         if self.on_finish:
             self.on_finish()
 
     def _cancel(self):
         if self.root:
-            self.root.destroy()
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
             self.root = None
         if self.on_cancel:
             self.on_cancel()

@@ -10,7 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from settings import Settings
 from recorder_engine import find_ffmpeg, detect_best_encoder, RecorderEngine
 from audio_manager import AudioManager
-from desktop_support import SingleInstance, exclude_from_capture
+from desktop_support import (
+    SingleInstance, exclude_from_capture,
+    create_wakeup_event, signal_existing_instance
+)
+from hotkey_manager import HotkeyManager, KEY_MAP
 
 
 class TestSettings(unittest.TestCase):
@@ -187,6 +191,36 @@ class TestSingleInstance(unittest.TestCase):
             self.assertIsInstance(res, bool)
         finally:
             root.destroy()
+
+    def test_wakeup_signaling(self):
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        event_name = "Local\\TestWakeupEventUnique"
+        h_ev = create_wakeup_event(event_name)
+        self.assertIsNotNone(h_ev)
+        self.assertNotEqual(h_ev, 0)
+        try:
+            # Initially not signaled
+            self.assertEqual(k32.WaitForSingleObject(h_ev, 0), 258)  # WAIT_TIMEOUT
+            # Signal from another "process"
+            ok = signal_existing_instance(event_name)
+            self.assertTrue(ok)
+            # Now signaled
+            self.assertEqual(k32.WaitForSingleObject(h_ev, 0), 0)    # WAIT_OBJECT_0
+        finally:
+            k32.CloseHandle(h_ev)
+
+
+class TestHotkeyManager(unittest.TestCase):
+    def test_hotkey_manager_config(self):
+        hm = HotkeyManager(key_record="F7", key_pause="F8")
+        self.assertEqual(hm.key_record, "F7")
+        self.assertEqual(hm.key_pause, "F8")
+        self.assertEqual(KEY_MAP.get(hm.key_record), 0x76)
+        self.assertEqual(KEY_MAP.get(hm.key_pause), 0x77)
+        hm.update_keys(key_record="f9", key_pause="f10")
+        self.assertEqual(hm.key_record, "F9")
+        self.assertEqual(hm.key_pause, "F10")
 
 
 if __name__ == "__main__":

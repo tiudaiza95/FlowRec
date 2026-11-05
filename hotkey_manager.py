@@ -21,9 +21,11 @@ KEY_MAP = {
 
 
 class HotkeyManager:
-    def __init__(self, on_toggle_record=None, on_toggle_pause=None):
+    def __init__(self, on_toggle_record=None, on_toggle_pause=None, key_record="F9", key_pause="F10"):
         self.on_toggle_record = on_toggle_record
         self.on_toggle_pause = on_toggle_pause
+        self.key_record = key_record.upper() if isinstance(key_record, str) else "F9"
+        self.key_pause = key_pause.upper() if isinstance(key_pause, str) else "F10"
         self._thread = None
         self._thread_id = None
         self._running = False
@@ -35,13 +37,27 @@ class HotkeyManager:
         self._thread = threading.Thread(target=self._msg_loop, daemon=True)
         self._thread.start()
 
+    def update_keys(self, key_record=None, key_pause=None):
+        """Update hotkeys dynamically while running."""
+        changed = False
+        if key_record and key_record.upper() != self.key_record:
+            self.key_record = key_record.upper()
+            changed = True
+        if key_pause and key_pause.upper() != self.key_pause:
+            self.key_pause = key_pause.upper()
+            changed = True
+        if changed and self._running:
+            self.stop()
+            self.start()
+
     def _msg_loop(self):
         self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
 
-        # Hotkey 1: F9 (Start / Stop)
-        # Hotkey 2: F10 (Pause / Resume)
-        u32.RegisterHotKey(0, 101, MOD_NOREPEAT, KEY_MAP["F9"])
-        u32.RegisterHotKey(0, 102, MOD_NOREPEAT, KEY_MAP["F10"])
+        # Dynamic hotkeys from configuration
+        vk_rec = KEY_MAP.get(self.key_record, 0x78)  # F9 default
+        vk_pau = KEY_MAP.get(self.key_pause, 0x79)  # F10 default
+        u32.RegisterHotKey(0, 101, MOD_NOREPEAT, vk_rec)
+        u32.RegisterHotKey(0, 102, MOD_NOREPEAT, vk_pau)
 
         msg = wintypes.MSG()
         while self._running:

@@ -36,6 +36,22 @@ class SingleInstance:
             self.mutex = None
 
 
+def create_wakeup_event(event_name="Local\\ProScreenRecorder.Wakeup"):
+    """Create a Windows named event for restoring a backgrounded instance."""
+    return ctypes.windll.kernel32.CreateEventW(None, False, False, event_name)
+
+
+def signal_existing_instance(event_name="Local\\ProScreenRecorder.Wakeup"):
+    """Signal the running instance to wake up and restore its window."""
+    EVENT_MODIFY_STATE = 0x0002
+    h_event = ctypes.windll.kernel32.OpenEventW(EVENT_MODIFY_STATE, False, event_name)
+    if h_event:
+        ctypes.windll.kernel32.SetEvent(h_event)
+        ctypes.windll.kernel32.CloseHandle(h_event)
+        return True
+    return False
+
+
 def set_dark_titlebar(window):
     """Enable Windows 10/11 native dark mode for title bar."""
     try:

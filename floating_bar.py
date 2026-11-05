@@ -27,6 +27,9 @@ class FloatingBar(ctk.CTkToplevel):
         # Dragging support
         self._drag_data = {"x": 0, "y": 0}
 
+        self.bind("<ButtonPress-1>", self._start_drag)
+        self.bind("<B1-Motion>", self._on_drag)
+
         container = ctk.CTkFrame(self, fg_color="#1e293b", corner_radius=12, border_width=1, border_color="#334155")
         container.pack(fill="both", expand=True, padx=2, pady=2)
 
@@ -82,14 +85,16 @@ class FloatingBar(ctk.CTkToplevel):
         self._pulse_timer()
 
     def _start_drag(self, event):
-        self._drag_data["x"] = event.x
-        self._drag_data["y"] = event.y
+        self._drag_data["start_x"] = event.x_root
+        self._drag_data["start_y"] = event.y_root
+        self._drag_data["win_x"] = self.winfo_x()
+        self._drag_data["win_y"] = self.winfo_y()
 
     def _on_drag(self, event):
-        dx = event.x - self._drag_data["x"]
-        dy = event.y - self._drag_data["y"]
-        x = self.winfo_x() + dx
-        y = self.winfo_y() + dy
+        dx = event.x_root - self._drag_data.get("start_x", event.x_root)
+        dy = event.y_root - self._drag_data.get("start_y", event.y_root)
+        x = self._drag_data.get("win_x", self.winfo_x()) + dx
+        y = self._drag_data.get("win_y", self.winfo_y()) + dy
         self.geometry(f"+{x}+{y}")
 
     def _pulse_timer(self):

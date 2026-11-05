@@ -6,8 +6,9 @@ import ctypes
 class RegionSelector:
     """Semi-transparent full-screen overlay for selecting a recording region."""
 
-    def __init__(self, on_selected_callback):
+    def __init__(self, on_selected_callback, parent=None):
         self.on_selected = on_selected_callback
+        self.parent = parent
         self.root = None
         self.canvas = None
         self.start_x = 0
@@ -28,7 +29,12 @@ class RegionSelector:
             vw = u32.GetSystemMetrics(0)
             vh = u32.GetSystemMetrics(1)
 
-        self.root = tk.Tk()
+        is_standalone = self.parent is None
+        if self.parent:
+            self.root = tk.Toplevel(self.parent)
+        else:
+            self.root = tk.Tk()
+
         self.root.overrideredirect(True)
         self.root.geometry(f"{vw}x{vh}+{vx}+{vy}")
         self.root.attributes("-alpha", 0.35)
@@ -54,7 +60,8 @@ class RegionSelector:
         self.root.bind("<Escape>", lambda e: self._cancel())
 
         self.root.focus_force()
-        self.root.mainloop()
+        if is_standalone:
+            self.root.mainloop()
 
     def _on_press(self, event):
         self.start_x = event.x
@@ -75,8 +82,8 @@ class RegionSelector:
     def _on_drag(self, event):
         cur_x, cur_y = event.x, event.y
         self.canvas.coords(self.rect_id, self.start_x, self.start_y, cur_x, cur_y)
-        w = abs(cur_x - self.start_x)
-        h = abs(cur_y - self.start_y)
+        w = (abs(cur_x - self.start_x) // 2) * 2
+        h = (abs(cur_y - self.start_y) // 2) * 2
         self.canvas.coords(self.label_id, max(self.start_x, cur_x), min(self.start_y, cur_y) - 15)
         self.canvas.itemconfig(self.label_id, text=f"{w} x {h}")
 
@@ -87,10 +94,17 @@ class RegionSelector:
         width = abs(end_x - self.start_x)
         height = abs(end_y - self.start_y)
 
-        self.root.destroy()
-        self.root = None
+        # Enforce even dimensions required by H.264 video encoders
+        width = (width // 2) * 2
+        height = (height // 2) * 2
+        left = (left // 2) * 2
+        top = (top // 2) * 2
 
-        if width >= 50 and height >= 50:
+        if self.root:
+            self.root.destroy()
+            self.root = None
+
+        if width >= 64 and height >= 64:
             if self.on_selected:
                 self.on_selected((left, top, width, height))
         else:

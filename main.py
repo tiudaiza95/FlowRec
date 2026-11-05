@@ -20,7 +20,8 @@ from countdown_overlay import CountdownOverlay
 from notification_pill import NotificationPill
 from desktop_support import (
     SingleInstance, set_high_dpi_aware, exclude_from_capture,
-    set_dark_titlebar, play_sound_cue, create_tray
+    set_dark_titlebar, play_sound_cue, create_tray,
+    create_wakeup_event, signal_existing_instance
 )
 
 ctk.set_appearance_mode("Dark")
@@ -67,7 +68,9 @@ class ProScreenRecorderApp(ctk.CTk):
         # Global Hotkeys
         self.hotkeys = HotkeyManager(
             on_toggle_record=self._on_hotkey_toggle_record,
-            on_toggle_pause=self._on_hotkey_toggle_pause
+            on_toggle_pause=self._on_hotkey_toggle_pause,
+            key_record=getattr(self.settings, "hotkey_start_stop", "F9"),
+            key_pause=getattr(self.settings, "hotkey_pause_resume", "F10")
         )
         self.hotkeys.start()
 
@@ -84,6 +87,10 @@ class ProScreenRecorderApp(ctk.CTk):
 
         # Initialize System Tray in background thread
         self._init_tray()
+
+        # Cross-process wakeup listener (clicking shortcut brings existing window to front)
+        self._wakeup_event = create_wakeup_event()
+        self._poll_wakeup_event()
 
         # Handle window close [X]
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -824,7 +831,7 @@ class ProScreenRecorderApp(ctk.CTk):
                 self.btn_select_region.configure(state="disabled", text="📐 Chọn vùng...")
                 self.engine.set_region(None)
 
-        selector = RegionSelector(on_region_picked)
+        selector = RegionSelector(on_region_picked, parent=self)
         selector.start()
 
     def _on_res_changed(self, choice):
@@ -921,7 +928,8 @@ class ProScreenRecorderApp(ctk.CTk):
             overlay = CountdownOverlay(
                 seconds=cd,
                 on_finish=self._actual_start_recording,
-                on_cancel=self._on_countdown_cancelled
+                on_cancel=self._on_countdown_cancelled,
+                parent=self
             )
             overlay.start()
         else:
@@ -996,7 +1004,8 @@ class ProScreenRecorderApp(ctk.CTk):
                 self.floating_bar.is_paused = False
                 self.floating_bar.btn_pause.configure(text="⏸", fg_color="#334155")
 
-    def stop_recording(self):
+    def stop_recording(self, reason=None):
+        self._stop_reason = reason
         self.engine.set_excluded_rect_provider(None)
         if getattr(self.settings, "sound_cues", True):
             play_sound_cue("stop")
@@ -1016,7 +1025,8 @@ class ProScreenRecorderApp(ctk.CTk):
             try:
                 if self.pill and self.pill.winfo_exists():
                     self.pill.destroy()
-                self.pill = NotificationPill(self, text="⏳ Đang lưu bản ghi video...", is_loading=True)
+                save_msg = "⚠️ Ổ đĩa đầy (<150MB)! Đang lưu..." if reason == "low_disk" else "⏳ Đang lưu bản ghi video..."
+                self.pill = NotificationPill(self, text=save_msg, is_loading=True)
             except Exception:
                 pass
 
@@ -1031,6 +1041,9 @@ class ProScreenRecorderApp(ctk.CTk):
         threading.Thread(target=_do_stop, daemon=True).start()
 
     def _on_stop_complete(self, final_file):
+        is_low_disk = getattr(self, "_stop_reason", None) == "low_disk"
+        self._stop_reason = None
+
         # Update main window controls quietly in background
         self.btn_record.configure(state="normal", text="🔴  BẮT ĐẦU GHI HÌNH (F9)", fg_color="#dc2626", hover_color="#b91c1c")
         self.btn_pause.configure(state="disabled", text="⏸ Tạm Dừng (F10)", fg_color="#374151")
@@ -1064,22 +1077,34 @@ class ProScreenRecorderApp(ctk.CTk):
         # IF IT WAS MINIMIZED / IN TRAY: NEVER POP UP THE MAIN WINDOW!
         if self._main_was_visible:
             if final_file and Path(final_file).is_file():
+                toast_title = "⚠️ Ổ ĐĨA ĐẦY - ĐÃ TỰ ĐỘNG LƯU AN TOÀN!" if is_low_disk else "✅ ĐÃ LƯU VIDEO THÀNH CÔNG!"
+                self.lbl_toast_title.configure(text=toast_title)
                 self.lbl_toast_subtitle.configure(text=f"📁 {file_name}   •   {size_mb:.1f} MB")
                 self.toast_card.pack(fill="x", padx=16, pady=4, after=self.record_card)
         else:
             # Show sleek Notification Pill at top of screen for 3.5s
             if final_file and Path(final_file).is_file():
+                success_text = f"⚠️ Ổ đĩa đầy (<150MB)! Đã tự động lưu: {file_name} ({size_mb:.1f} MB)" if is_low_disk else f"✅ Đã lưu: {file_name} ({size_mb:.1f} MB)"
                 if self.pill and self.pill.winfo_exists():
-                    self.pill.set_success(f"✅ Đã lưu: {file_name} ({size_mb:.1f} MB)", file_path=final_file)
+                    self.pill.set_success(success_text, file_path=final_file)
                 else:
                     try:
                         self.pill = NotificationPill(
                             self,
-                            text=f"✅ Đã lưu ra Desktop: {file_name} ({size_mb:.1f} MB)",
+                            text=success_text,
                             is_loading=False,
                             file_path=final_file
                         )
                     except Exception:
+                        pass
+                if is_low_disk and self.tray:
+                    try:
+                        self.tray.notify(
+                            f"Ổ đĩa lưu trữ còn dưới 150MB. Bản ghi đã được tự động lưu an toàn:\n{file_name}",
+                            "⚠️ Cảnh báo ổ đĩa đầy - Đã lưu bản ghi"
+                        )
+                    except Exception:
+                        pass
                         pass
 
                 # Windows System Tray Notification
@@ -1107,6 +1132,10 @@ class ProScreenRecorderApp(ctk.CTk):
             return
 
         stats = self._latest_stats
+        if stats.get("low_disk") and self.engine.state in ("recording", "paused"):
+            self.stop_recording(reason="low_disk")
+            return
+
         elapsed = stats.get("elapsed", 0.0)
         fps = stats.get("fps", 0.0)
         size_mb = stats.get("size_bytes", 0) / (1024 * 1024)
@@ -1159,10 +1188,31 @@ class ProScreenRecorderApp(ctk.CTk):
         else:
             self.quit_app()
 
+    def _poll_wakeup_event(self):
+        """Restore window smoothly when user double-clicks desktop shortcut while running."""
+        if hasattr(self, "_wakeup_event") and self._wakeup_event:
+            try:
+                if ctypes.windll.kernel32.WaitForSingleObject(self._wakeup_event, 0) == 0:
+                    self.show_from_tray()
+                    self.lift()
+                    self.focus_force()
+                    self.attributes("-topmost", True)
+                    self.after(250, lambda: self.attributes("-topmost", False))
+            except Exception:
+                pass
+        if self.winfo_exists():
+            self.after(400, self._poll_wakeup_event)
+
     def quit_app(self):
         """Clean teardown and full exit."""
         self._stop_test_mic()
         self.hotkeys.stop()
+        if hasattr(self, "_wakeup_event") and self._wakeup_event:
+            try:
+                ctypes.windll.kernel32.CloseHandle(self._wakeup_event)
+            except Exception:
+                pass
+            self._wakeup_event = None
         if self.floating_bar and self.floating_bar.winfo_exists():
             self.floating_bar.destroy()
         if self.library_win and self.library_win.winfo_exists():
@@ -1181,10 +1231,12 @@ def main():
     set_high_dpi_aware()
     instance = SingleInstance("Local\\ProScreenRecorder.Instance")
     if instance.already_running:
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showinfo("Thông báo", "Pro Screen Recorder đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
-        root.destroy()
+        signaled = signal_existing_instance()
+        if not signaled:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showinfo("Thông báo", "Pro Screen Recorder đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
+            root.destroy()
         sys.exit(0)
 
     app = ProScreenRecorderApp()

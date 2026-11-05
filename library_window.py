@@ -158,6 +158,12 @@ class LibraryWindow(ctk.CTkToplevel):
             try:
                 path.unlink(missing_ok=True)
                 self.refresh_list()
+            except PermissionError:
+                messagebox.showerror(
+                    "Không thể xóa tệp",
+                    f"Video '{path.name}' đang được mở bởi ứng dụng khác (trình phát video hoặc Media Player).\n\nVui lòng đóng video trước khi xóa.",
+                    parent=self
+                )
             except Exception as e:
                 messagebox.showerror("Lỗi", f"Không thể xóa file: {e}", parent=self)
 
