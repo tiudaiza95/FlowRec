@@ -24,6 +24,12 @@ from desktop_support import (
     set_dark_titlebar, play_sound_cue, create_tray
 )
 
+set_high_dpi_aware()
+
+# Disable automatic DPI scaling tracker loop to prevent background timer jitter
+from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
+ScalingTracker.check_dpi_scaling = lambda: None
+
 ctk.deactivate_automatic_dpi_awareness()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -35,8 +41,11 @@ class ProScreenRecorderApp(ctk.CTk):
 
         self.title("Pro Screen Recorder - Ghi Màn Hình & Micro")
         self.geometry("600x860")
-        self.minsize(540, 720)
+        self.resizable(False, False)
         self.configure(fg_color="#0b0f19")
+
+        # Disconnect CustomTkinter's <Configure> listener to prevent event queue buildup during window dragging
+        self.unbind("<Configure>")
 
         # Set window icon & native Windows dark titlebar
         self.icon_path = Path(__file__).parent / "assets" / "icon.ico"

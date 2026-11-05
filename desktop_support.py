@@ -6,7 +6,13 @@ import pystray
 
 
 def set_high_dpi_aware():
-    """Enable clean, stable System High-DPI awareness on Windows without DWM drag stutter."""
+    """Enable clean, modern Per-Monitor V2 High-DPI awareness on Windows 10/11 without DWM lag."""
+    try:
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
@@ -55,11 +61,11 @@ def signal_existing_instance(event_name="Local\\ProScreenRecorder.Wakeup"):
 def set_dark_titlebar(window):
     """Enable Windows 10/11 native dark mode for title bar."""
     try:
-        window.update_idletasks()
         hwnd_client = window.winfo_id()
         top_hwnd = ctypes.windll.user32.GetAncestor(hwnd_client, 2) or hwnd_client
         val = ctypes.c_int(1)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(top_hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+        if ctypes.windll.dwmapi.DwmSetWindowAttribute(top_hwnd, 20, ctypes.byref(val), ctypes.sizeof(val)) != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(top_hwnd, 19, ctypes.byref(val), ctypes.sizeof(val))
     except Exception:
         pass
 
