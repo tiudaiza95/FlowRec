@@ -20,10 +20,10 @@ from countdown_overlay import CountdownOverlay
 from notification_pill import NotificationPill
 from desktop_support import (
     SingleInstance, set_high_dpi_aware, exclude_from_capture,
-    set_dark_titlebar, play_sound_cue, create_tray,
-    create_wakeup_event, signal_existing_instance
+    set_dark_titlebar, play_sound_cue, create_tray
 )
 
+ctk.deactivate_automatic_dpi_awareness()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -47,7 +47,6 @@ class ProScreenRecorderApp(ctk.CTk):
         set_dark_titlebar(self)
 
         self.settings = Settings()
-        exclude_from_capture(self)
         self.engine = RecorderEngine(self.settings, on_update_callback=self._on_engine_update)
         self.floating_bar = None
         self.library_win = None
@@ -84,10 +83,6 @@ class ProScreenRecorderApp(ctk.CTk):
 
         # Initialize System Tray in background thread
         self._init_tray()
-
-        # Cross-process wakeup listener (clicking shortcut brings existing window to front)
-        self._wakeup_event = create_wakeup_event()
-        self._poll_wakeup_event()
 
         # Handle window close [X]
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -166,25 +161,19 @@ class ProScreenRecorderApp(ctk.CTk):
     def _build_header(self):
         header = ctk.CTkFrame(self.main_scroll, fg_color="#111827", height=55, corner_radius=10)
         header.pack(fill="x", side="top", padx=16, pady=(10, 6))
-        header.bind("<ButtonPress-1>", self._start_native_drag)
 
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left", padx=16, pady=10)
-        left.bind("<ButtonPress-1>", self._start_native_drag)
 
-        lbl_title = ctk.CTkLabel(
+        ctk.CTkLabel(
             left, text="🎥 PRO SCREEN RECORDER",
             font=("Segoe UI", 16, "bold"), text_color="#f8fafc"
-        )
-        lbl_title.pack(side="left")
-        lbl_title.bind("<ButtonPress-1>", self._start_native_drag)
+        ).pack(side="left")
 
-        lbl_sub = ctk.CTkLabel(
+        ctk.CTkLabel(
             left, text="Pro Edition • Siêu Nhẹ & GPU",
             font=("Segoe UI", 11), text_color="#38bdf8"
-        )
-        lbl_sub.pack(side="left", padx=(10, 0))
-        lbl_sub.bind("<ButtonPress-1>", self._start_native_drag)
+        ).pack(side="left", padx=(10, 0))
 
         # Right buttons: Minimize to Tray & Library
         btn_tray = ctk.CTkButton(
@@ -202,17 +191,6 @@ class ProScreenRecorderApp(ctk.CTk):
             command=self.open_library
         )
         btn_lib.pack(side="right", padx=(4, 4), pady=10)
-
-    def _start_native_drag(self, event):
-        """Native Windows move loop (WM_NCLBUTTONDOWN) via DWM for 100% smooth, stable window dragging."""
-        try:
-            hwnd = self.winfo_id()
-            top_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd
-            ctypes.windll.user32.ReleaseCapture()
-            ctypes.windll.user32.SendMessageW(top_hwnd, 0xA1, 2, 0)
-        except Exception:
-            pass
-        return "break"
 
     def _build_record_card(self):
         self.record_card = ctk.CTkFrame(self.main_scroll, fg_color="#161e2e", corner_radius=14, border_width=1, border_color="#1f2937")
@@ -1192,12 +1170,6 @@ class ProScreenRecorderApp(ctk.CTk):
         """Clean teardown and full exit."""
         self._stop_test_mic()
         self.hotkeys.stop()
-        if hasattr(self, "_wakeup_event") and self._wakeup_event:
-            try:
-                ctypes.windll.kernel32.CloseHandle(self._wakeup_event)
-            except Exception:
-                pass
-            self._wakeup_event = None
         if self.floating_bar and self.floating_bar.winfo_exists():
             self.floating_bar.destroy()
         if self.library_win and self.library_win.winfo_exists():
@@ -1220,8 +1192,7 @@ def main():
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
-        signaled = signal_existing_instance()
-        if not signaled and not hwnd:
+        else:
             root = tk.Tk()
             root.withdraw()
             messagebox.showinfo("Thông báo", "Pro Screen Recorder đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")

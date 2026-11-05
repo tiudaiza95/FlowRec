@@ -6,9 +6,9 @@ import pystray
 
 
 def set_high_dpi_aware():
-    """Enable Per-Monitor V2 High-DPI awareness on Windows."""
+    """Enable clean, stable System High-DPI awareness on Windows without DWM drag stutter."""
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         try:
             ctypes.windll.user32.SetProcessDPIAware()
