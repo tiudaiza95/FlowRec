@@ -33,7 +33,7 @@ class ProScreenRecorderApp(ctk.CTk):
         super().__init__()
 
         self.title("Pro Screen Recorder - Ghi Màn Hình & Micro")
-        self.geometry("600x820")
+        self.geometry("600x860")
         self.minsize(540, 720)
         self.configure(fg_color="#0b0f19")
 
@@ -198,19 +198,25 @@ class ProScreenRecorderApp(ctk.CTk):
     def _build_header(self):
         header = ctk.CTkFrame(self.main_scroll, fg_color="#111827", height=55, corner_radius=10)
         header.pack(fill="x", side="top", padx=16, pady=(10, 6))
+        header.bind("<ButtonPress-1>", self._start_native_drag)
 
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left", padx=16, pady=10)
+        left.bind("<ButtonPress-1>", self._start_native_drag)
 
-        ctk.CTkLabel(
+        lbl_title = ctk.CTkLabel(
             left, text="🎥 PRO SCREEN RECORDER",
             font=("Segoe UI", 16, "bold"), text_color="#f8fafc"
-        ).pack(side="left")
+        )
+        lbl_title.pack(side="left")
+        lbl_title.bind("<ButtonPress-1>", self._start_native_drag)
 
-        ctk.CTkLabel(
+        lbl_sub = ctk.CTkLabel(
             left, text="Pro Edition • Siêu Nhẹ & GPU",
             font=("Segoe UI", 11), text_color="#38bdf8"
-        ).pack(side="left", padx=(10, 0))
+        )
+        lbl_sub.pack(side="left", padx=(10, 0))
+        lbl_sub.bind("<ButtonPress-1>", self._start_native_drag)
 
         # Right buttons: Minimize to Tray & Library
         btn_tray = ctk.CTkButton(
@@ -228,6 +234,17 @@ class ProScreenRecorderApp(ctk.CTk):
             command=self.open_library
         )
         btn_lib.pack(side="right", padx=(4, 4), pady=10)
+
+    def _start_native_drag(self, event):
+        """Native Windows move loop (WM_NCLBUTTONDOWN) via DWM for 100% smooth, stable window dragging."""
+        try:
+            hwnd = self.winfo_id()
+            top_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(top_hwnd, 0xA1, 2, 0)
+        except Exception:
+            pass
+        return "break"
 
     def _build_record_card(self):
         self.record_card = ctk.CTkFrame(self.main_scroll, fg_color="#161e2e", corner_radius=14, border_width=1, border_color="#1f2937")
