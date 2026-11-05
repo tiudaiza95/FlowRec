@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox
 from pathlib import Path
@@ -44,8 +45,8 @@ class ProScreenRecorderApp(ctk.CTk):
         self.resizable(False, False)
         self.configure(fg_color="#0b0f19")
 
-        # Disconnect CustomTkinter's <Configure> listener to prevent event queue buildup during window dragging
-        self.unbind("<Configure>")
+        # Throttle configure events to prevent high-polling mouse queue backlog and window drifting
+        self.bind("<Configure>", self._on_configure_throttle)
 
         # Set window icon & native Windows dark titlebar
         self.icon_path = Path(__file__).parent / "assets" / "icon.ico"
@@ -166,24 +167,35 @@ class ProScreenRecorderApp(ctk.CTk):
     def _on_tray_quit(self, icon=None, item=None):
         self.after(0, self.quit_app)
 
+    def _on_configure_throttle(self, event):
+        """Throttle high-frequency mouse configure events to prevent event queue backlog and window drifting."""
+        if str(event.widget) == ".":
+            time.sleep(0.012)
+
     # --- UI Builders ---
 
     def _build_header(self):
         header = ctk.CTkFrame(self.main_scroll, fg_color="#111827", height=55, corner_radius=10)
         header.pack(fill="x", side="top", padx=16, pady=(10, 6))
+        header.bind("<ButtonPress-1>", self._start_native_drag)
 
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left", padx=16, pady=10)
+        left.bind("<ButtonPress-1>", self._start_native_drag)
 
-        ctk.CTkLabel(
+        lbl_title = ctk.CTkLabel(
             left, text="🎥 PRO SCREEN RECORDER",
             font=("Segoe UI", 16, "bold"), text_color="#f8fafc"
-        ).pack(side="left")
+        )
+        lbl_title.pack(side="left")
+        lbl_title.bind("<ButtonPress-1>", self._start_native_drag)
 
-        ctk.CTkLabel(
+        lbl_sub = ctk.CTkLabel(
             left, text="Pro Edition • Siêu Nhẹ & GPU",
             font=("Segoe UI", 11), text_color="#38bdf8"
-        ).pack(side="left", padx=(10, 0))
+        )
+        lbl_sub.pack(side="left", padx=(10, 0))
+        lbl_sub.bind("<ButtonPress-1>", self._start_native_drag)
 
         # Right buttons: Minimize to Tray & Library
         btn_tray = ctk.CTkButton(
@@ -201,6 +213,17 @@ class ProScreenRecorderApp(ctk.CTk):
             command=self.open_library
         )
         btn_lib.pack(side="right", padx=(4, 4), pady=10)
+
+    def _start_native_drag(self, event):
+        """Native Windows move loop (WM_NCLBUTTONDOWN) via DWM for 100% hardware dragging."""
+        try:
+            hwnd = self.winfo_id()
+            top_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or hwnd
+            ctypes.windll.user32.ReleaseCapture()
+            ctypes.windll.user32.SendMessageW(top_hwnd, 0xA1, 2, 0)
+        except Exception:
+            pass
+        return "break"
 
     def _build_record_card(self):
         self.record_card = ctk.CTkFrame(self.main_scroll, fg_color="#161e2e", corner_radius=14, border_width=1, border_color="#1f2937")
