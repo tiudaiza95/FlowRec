@@ -37,9 +37,6 @@ class ProScreenRecorderApp(ctk.CTk):
         self.minsize(540, 720)
         self.configure(fg_color="#0b0f19")
 
-        # Start hidden for smooth fade-in animation
-        self.attributes("-alpha", 0.0)
-
         # Set window icon & native Windows dark titlebar
         self.icon_path = Path(__file__).parent / "assets" / "icon.ico"
         if self.icon_path.is_file():
@@ -95,48 +92,36 @@ class ProScreenRecorderApp(ctk.CTk):
         # Handle window close [X]
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Smooth opening fade-in animation
-        self.after(50, self.fade_in)
+    # --- Window Display Management ---
 
-    # --- Window Animations (Fade-in / Fade-out) ---
-
-    def fade_in(self, target_alpha=1.0, step=0.1, interval=12):
-        """Smoothly fades in the window on launch or restore."""
+    def show_from_tray(self):
+        """Restore window cleanly from system tray to foreground."""
         self.deiconify()
         self.lift()
         self.focus_force()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
 
-        def _step(current):
-            next_val = min(target_alpha, current + step)
+    def hide_to_tray(self):
+        """Minimize cleanly to Windows taskbar notification area."""
+        if getattr(self.settings, "sound_cues", True):
+            play_sound_cue("tray")
+        self.withdraw()
+
+        if self.tray:
             try:
-                self.attributes("-alpha", next_val)
-                if next_val < target_alpha:
-                    self.after(interval, lambda: _step(next_val))
+                self.tray.notify(
+                    "Pro Screen Recorder đang chạy trong khay hệ thống.\nNhấn F9 để Bắt đầu/Dừng quay!",
+                    "Đã ẩn xuống khay hệ thống"
+                )
             except Exception:
                 pass
 
-        _step(0.0)
+    def fade_in(self):
+        self.show_from_tray()
 
-    def fade_out_to_tray(self, step=0.12, interval=10):
-        """Smoothly fades out the window before hiding into the system tray."""
-        if getattr(self.settings, "sound_cues", True):
-            play_sound_cue("tray")
-
-        def _step(current):
-            next_val = max(0.0, current - step)
-            try:
-                self.attributes("-alpha", next_val)
-                if next_val > 0.0:
-                    self.after(interval, lambda: _step(next_val))
-                else:
-                    self.withdraw()
-                    self.attributes("-alpha", 1.0)
-            except Exception:
-                self.withdraw()
-                self.attributes("-alpha", 1.0)
-
-        cur_alpha = float(self.attributes("-alpha") or 1.0)
-        _step(cur_alpha)
+    def fade_out_to_tray(self):
+        self.hide_to_tray()
 
     # --- System Tray Integration ---
 
@@ -175,23 +160,6 @@ class ProScreenRecorderApp(ctk.CTk):
 
     def _on_tray_quit(self, icon=None, item=None):
         self.after(0, self.quit_app)
-
-    def hide_to_tray(self):
-        """Minimize to Windows taskbar notification area."""
-        self.fade_out_to_tray()
-
-        if self.tray:
-            try:
-                self.tray.notify(
-                    "Pro Screen Recorder đang chạy trong khay hệ thống.\nNhấn F9 để Bắt đầu/Dừng quay!",
-                    "Đã ẩn xuống khay hệ thống"
-                )
-            except Exception:
-                pass
-
-    def show_from_tray(self):
-        """Restore window from system tray with smooth fade-in."""
-        self.fade_in()
 
     # --- UI Builders ---
 
@@ -1029,7 +997,7 @@ class ProScreenRecorderApp(ctk.CTk):
 
         # Check if the main window was visibly open on screen
         try:
-            self._main_was_visible = (self.state() != "iconic" and self.winfo_viewable() and float(self.attributes("-alpha") or 1.0) > 0.1)
+            self._main_was_visible = (self.state() != "iconic" and self.winfo_viewable())
         except Exception:
             self._main_was_visible = False
 
@@ -1164,7 +1132,7 @@ class ProScreenRecorderApp(ctk.CTk):
 
         # Only touch main window widgets if the main window is actually visible!
         # Skipping canvas coords/redraws when minimized eliminates UI thread overhead completely.
-        if self.state() != "iconic" and self.winfo_viewable() and float(self.attributes("-alpha") or 1.0) > 0.05:
+        if self.state() != "iconic" and self.winfo_viewable():
             m, s = divmod(int(elapsed), 60)
             h, m = divmod(m, 60)
             self.lbl_timer.configure(text=f"{h:02d}:{m:02d}:{s:02d}")
@@ -1248,8 +1216,12 @@ def main():
     set_high_dpi_aware()
     instance = SingleInstance("Local\\ProScreenRecorder.Instance")
     if instance.already_running:
+        hwnd = ctypes.windll.user32.FindWindowW(None, "Pro Screen Recorder - Ghi Màn Hình & Micro")
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
         signaled = signal_existing_instance()
-        if not signaled:
+        if not signaled and not hwnd:
             root = tk.Tk()
             root.withdraw()
             messagebox.showinfo("Thông báo", "Pro Screen Recorder đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
