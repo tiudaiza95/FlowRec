@@ -16,7 +16,7 @@ class LibraryWindow(ctk.CTkToplevel):
         self.transient(parent)
         self.output_dir = Path(output_dir)
 
-        self.title("Thư Viện Video Đã Quay - Pro Screen Recorder")
+        self.title("FlowRec - Recordings Library")
         self.geometry("740x500")
         self.minsize(600, 400)
         self.configure(fg_color="#0f172a")
@@ -73,8 +73,9 @@ class LibraryWindow(ctk.CTkToplevel):
             return
 
         if self.output_dir.resolve() == (Path.home() / "Desktop").resolve():
+            raw_vids = list(self.output_dir.glob("FLOWREC_*.mp4")) + list(self.output_dir.glob("REC_*.mp4"))
             videos = sorted(
-                [p for p in self.output_dir.glob("REC_*.mp4")],
+                list(set(raw_vids)),
                 key=lambda x: x.stat().st_mtime,
                 reverse=True
             )

@@ -38,7 +38,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='ProScreenRecorder',
+    name='FlowRec',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

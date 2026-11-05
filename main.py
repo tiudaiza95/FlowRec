@@ -1,5 +1,5 @@
-"""Pro Screen Recorder - Siêu Nhẹ & Đỉnh Cao Cho Windows.
-Quay màn hình phần cứng GPU, khay hệ thống, hiệu ứng chuyển động, âm thanh thông báo.
+"""FlowRec - Smooth, Featherlight Screen & Audio Recorder for Windows.
+Quay màn hình phần cứng GPU, khay hệ thống, hiệu ứng con trỏ mượt mà.
 """
 import ctypes
 import os
@@ -36,11 +36,11 @@ ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
 
-class ProScreenRecorderApp(ctk.CTk):
+class FlowRecApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Pro Screen Recorder - Ghi Màn Hình & Micro")
+        self.title("FlowRec - Smooth Screen & Audio Recorder")
         self.geometry("600x860")
         self.resizable(False, False)
         self.configure(fg_color="#0b0f19")
@@ -117,7 +117,7 @@ class ProScreenRecorderApp(ctk.CTk):
         if self.tray:
             try:
                 self.tray.notify(
-                    "Pro Screen Recorder đang chạy trong khay hệ thống.\nNhấn F9 để Bắt đầu/Dừng quay!",
+                    "FlowRec đang chạy trong khay hệ thống.\nNhấn F9 để Bắt đầu/Dừng quay!",
                     "Đã ẩn xuống khay hệ thống"
                 )
             except Exception:
@@ -184,14 +184,14 @@ class ProScreenRecorderApp(ctk.CTk):
         left.bind("<ButtonPress-1>", self._start_native_drag)
 
         lbl_title = ctk.CTkLabel(
-            left, text="🎥 PRO SCREEN RECORDER",
+            left, text="🎥 FLOWREC",
             font=("Segoe UI", 16, "bold"), text_color="#f8fafc"
         )
         lbl_title.pack(side="left")
         lbl_title.bind("<ButtonPress-1>", self._start_native_drag)
 
         lbl_sub = ctk.CTkLabel(
-            left, text="Pro Edition • Siêu Nhẹ & GPU",
+            left, text="Global Edition • Siêu Nhẹ & GPU",
             font=("Segoe UI", 11), text_color="#38bdf8"
         )
         lbl_sub.pack(side="left", padx=(10, 0))
@@ -1202,22 +1202,26 @@ class ProScreenRecorderApp(ctk.CTk):
         self.destroy()
 
 
+# Backward-compatibility alias
+ProScreenRecorderApp = FlowRecApp
+
+
 def main():
     set_high_dpi_aware()
-    instance = SingleInstance("Local\\ProScreenRecorder.Instance")
+    instance = SingleInstance("Local\\FlowRec.Instance")
     if instance.already_running:
-        hwnd = ctypes.windll.user32.FindWindowW(None, "Pro Screen Recorder - Ghi Màn Hình & Micro")
+        hwnd = ctypes.windll.user32.FindWindowW(None, "FlowRec - Smooth Screen & Audio Recorder")
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
         else:
             root = tk.Tk()
             root.withdraw()
-            messagebox.showinfo("Thông báo", "Pro Screen Recorder đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
+            messagebox.showinfo("Thông báo", "FlowRec đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
             root.destroy()
         sys.exit(0)
 
-    app = ProScreenRecorderApp()
+    app = FlowRecApp()
     app.mainloop()
     instance.close()
 

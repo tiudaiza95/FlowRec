@@ -1,10 +1,12 @@
-"""Settings manager for Pro Screen Recorder."""
+"""Settings manager for FlowRec."""
 import json
 import os
 from pathlib import Path
 
 DEFAULT_OUTPUT_DIR = Path.home() / "Desktop"
-CONFIG_FILE = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ProScreenRecorder" / "config.json"
+CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "FlowRec"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+OLD_CONFIG_FILE = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ProScreenRecorder" / "config.json"
 
 
 class Settings:
@@ -37,8 +39,9 @@ class Settings:
 
     def load(self):
         try:
-            if CONFIG_FILE.is_file():
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            cfg_target = CONFIG_FILE if CONFIG_FILE.is_file() else (OLD_CONFIG_FILE if OLD_CONFIG_FILE.is_file() else None)
+            if cfg_target and cfg_target.is_file():
+                data = json.loads(cfg_target.read_text(encoding="utf-8"))
                 for k, v in data.items():
                     if hasattr(self, k):
                         setattr(self, k, v)
@@ -46,7 +49,7 @@ class Settings:
             pass
 
         old_default = Path.home() / "Videos" / "ProScreenRecorder"
-        if self.output_dir == str(old_default):
+        if self.output_dir == str(old_default) or "ProScreenRecorder" in self.output_dir:
             self.output_dir = str(DEFAULT_OUTPUT_DIR)
 
         # Ensure output directory exists

@@ -252,7 +252,7 @@ class RecorderEngine:
                 try:
                     if time.time() - temp_v.stat().st_mtime > 10:
                         stem = temp_v.stem.replace("~temp_v_", "")
-                        rec_path = out_dir / f"REC_{stem}.mp4"
+                        rec_path = out_dir / f"FLOWREC_{stem}.mp4"
                         if not rec_path.exists():
                             try:
                                 temp_v.replace(rec_path)
@@ -290,7 +290,7 @@ class RecorderEngine:
 
         self.temp_video_path = out_dir / f"~temp_v_{timestamp}.mp4"
         self.temp_audio_path = out_dir / f"~temp_a_{timestamp}.wav"
-        self.final_output_path = out_dir / f"REC_{timestamp}.mp4"
+        self.final_output_path = out_dir / f"FLOWREC_{timestamp}.mp4"
 
         # Determine geometry
         screen_w = u32.GetSystemMetrics(0)

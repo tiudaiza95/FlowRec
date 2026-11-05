@@ -25,7 +25,7 @@ def set_high_dpi_aware():
 class SingleInstance:
     """Ensures only one instance of the application runs at any time."""
 
-    def __init__(self, app_id="Local\\ProScreenRecorder.Instance"):
+    def __init__(self, app_id="Local\\FlowRec.Instance"):
         self.app_id = app_id
         self.mutex = None
         self.already_running = False
@@ -42,12 +42,12 @@ class SingleInstance:
             self.mutex = None
 
 
-def create_wakeup_event(event_name="Local\\ProScreenRecorder.Wakeup"):
+def create_wakeup_event(event_name="Local\\FlowRec.Wakeup"):
     """Create a Windows named event for restoring a backgrounded instance."""
     return ctypes.windll.kernel32.CreateEventW(None, False, False, event_name)
 
 
-def signal_existing_instance(event_name="Local\\ProScreenRecorder.Wakeup"):
+def signal_existing_instance(event_name="Local\\FlowRec.Wakeup"):
     """Signal the running instance to wake up and restore its window."""
     EVENT_MODIFY_STATE = 0x0002
     h_event = ctypes.windll.kernel32.OpenEventW(EVENT_MODIFY_STATE, False, event_name)
@@ -101,7 +101,7 @@ def create_tray(icon_path: Path, on_open, on_toggle_record, on_toggle_pause, on_
         img = Image.new("RGBA", (32, 32), (239, 68, 68, 255))
 
     menu = pystray.Menu(
-        pystray.MenuItem("🎥 Mở giao diện", on_open, default=True),
+        pystray.MenuItem("🎥 Mở FlowRec", on_open, default=True),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("🔴 Bắt đầu / Dừng quay (F9)", on_toggle_record),
         pystray.MenuItem("⏸ Tạm dừng / Tiếp tục (F10)", on_toggle_pause),
@@ -112,7 +112,7 @@ def create_tray(icon_path: Path, on_open, on_toggle_record, on_toggle_pause, on_
         pystray.MenuItem("❌ Thoát hoàn toàn", on_quit)
     )
 
-    tray = pystray.Icon("ProScreenRecorder", img, "Pro Screen Recorder", menu)
+    tray = pystray.Icon("FlowRec", img, "FlowRec", menu)
     return tray
 
 

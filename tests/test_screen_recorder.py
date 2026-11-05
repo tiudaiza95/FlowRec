@@ -1,4 +1,4 @@
-"""Unit tests for Pro Screen Recorder."""
+"""Unit tests for FlowRec."""
 import os
 import unittest
 from pathlib import Path
@@ -169,7 +169,7 @@ class TestRecorderEngine(unittest.TestCase):
             os.utime(str(temp_v), (time.time() - 30, time.time() - 30))
             recovered = engine.recover_orphaned_recordings()
             self.assertEqual(len(recovered), 1)
-            self.assertTrue(Path(td, "REC_20261105_120000.mp4").is_file())
+            self.assertTrue(Path(td, "FLOWREC_20261105_120000.mp4").is_file())
             self.assertFalse(temp_v.exists())
 
 
