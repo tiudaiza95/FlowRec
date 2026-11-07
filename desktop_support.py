@@ -107,7 +107,7 @@ def create_tray(icon_path: Path, on_open, on_toggle_record, on_toggle_pause, on_
         pystray.MenuItem("⏸ Tạm dừng / Tiếp tục (F10)", on_toggle_pause),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("📹 Thư viện video", on_open_library),
-        pystray.MenuItem("📁 Mở Desktop", on_open_desktop),
+        pystray.MenuItem("📁 Mở thư mục lưu video", on_open_desktop),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("❌ Thoát hoàn toàn", on_quit)
     )

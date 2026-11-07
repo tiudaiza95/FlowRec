@@ -22,7 +22,8 @@ from countdown_overlay import CountdownOverlay
 from notification_pill import NotificationPill
 from desktop_support import (
     SingleInstance, set_high_dpi_aware, exclude_from_capture,
-    set_dark_titlebar, play_sound_cue, create_tray
+    set_dark_titlebar, play_sound_cue, create_tray,
+    create_wakeup_event, signal_existing_instance
 )
 
 set_high_dpi_aware()
@@ -94,6 +95,7 @@ class FlowRecApp(ctk.CTk):
 
         # Initialize System Tray in background thread
         self._init_tray()
+        self._init_wakeup_listener()
 
         # Handle window close [X]
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1167,7 +1169,7 @@ class FlowRecApp(ctk.CTk):
                 if self.tray:
                     try:
                         self.tray.notify(
-                            f"File: {file_name} ({size_mb:.1f} MB)\nĐã lưu thẳng ra Desktop của bạn!",
+                            f"File: {file_name} ({size_mb:.1f} MB)\nĐã lưu thành công vào thư mục lưu trữ!",
                             "✅ Đã lưu bản ghi màn hình"
                         )
                     except Exception:
@@ -1244,8 +1246,26 @@ class FlowRecApp(ctk.CTk):
         else:
             self.quit_app()
 
+    def _init_wakeup_listener(self):
+        try:
+            self._h_wakeup = create_wakeup_event("Local\\FlowRec.Wakeup")
+            def _listener():
+                while getattr(self, "_h_wakeup", None):
+                    res = ctypes.windll.kernel32.WaitForSingleObject(self._h_wakeup, 500)
+                    if res == 0:
+                        self.after(0, self.show_from_tray)
+            threading.Thread(target=_listener, daemon=True).start()
+        except Exception:
+            pass
+
     def quit_app(self):
         """Clean teardown and full exit."""
+        if hasattr(self, "_h_wakeup") and self._h_wakeup:
+            try:
+                ctypes.windll.kernel32.CloseHandle(self._h_wakeup)
+            except Exception:
+                pass
+            self._h_wakeup = None
         self._stop_test_mic()
         self.hotkeys.stop()
         if self.floating_bar and self.floating_bar.winfo_exists():
@@ -1270,15 +1290,11 @@ def main():
     set_high_dpi_aware()
     instance = SingleInstance("Local\\FlowRec.Instance")
     if instance.already_running:
+        signal_existing_instance("Local\\FlowRec.Wakeup")
         hwnd = ctypes.windll.user32.FindWindowW(None, "FlowRec - Smooth Screen & Audio Recorder")
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
-        else:
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showinfo("Thông báo", "FlowRec đang chạy trên máy tính (hãy kiểm tra khay hệ thống cạnh đồng hồ).")
-            root.destroy()
         sys.exit(0)
 
     app = FlowRecApp()

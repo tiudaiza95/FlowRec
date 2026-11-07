@@ -137,8 +137,13 @@ class CursorRenderer:
 
         # Draw actual cursor icon (query current cursor or fallback to arrow)
         h_cur = None
-        if u32.GetCursorInfo(ctypes.byref(self._ci)) and self._ci.hCursor:
-            h_cur = self._ci.hCursor
+        self._ci.cbSize = ctypes.sizeof(CURSORINFO)
+        if u32.GetCursorInfo(ctypes.byref(self._ci)):
+            if not (self._ci.flags & 1):
+                # Cursor is explicitly hidden by application (e.g. video player or full-screen game)
+                return
+            if self._ci.hCursor:
+                h_cur = self._ci.hCursor
         if not h_cur:
             h_cur = self.h_arrow
 
@@ -215,7 +220,11 @@ def detect_best_encoder(ffmpeg_path):
             _CACHED_ENCODER = "h264_mf"
             return "h264_mf"
     except Exception:
-        pass
+        if 'proc' in locals() and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
     _CACHED_ENCODER = "libx264"
     return "libx264"
 

@@ -83,6 +83,8 @@ class FloatingBar(tk.Toplevel):
 
         self.is_paused = False
         self._pulse_state = True
+        self._cached_rect = (x, y, w, h)
+        self.bind("<Configure>", lambda e: self._update_cached_rect())
         self._pulse_timer()
 
     def _start_drag(self, event):
@@ -94,7 +96,10 @@ class FloatingBar(tk.Toplevel):
     def _on_drag(self, event):
         dx = event.x_root - self._drag_start_x
         dy = event.y_root - self._drag_start_y
-        self.geometry(f"+{self._win_start_x + dx}+{self._win_start_y + dy}")
+        new_x = self._win_start_x + dx
+        new_y = self._win_start_y + dy
+        self.geometry(f"+{new_x}+{new_y}")
+        self._cached_rect = (new_x, new_y, self.winfo_width(), self.winfo_height())
 
     def _pulse_timer(self):
         if not self.winfo_exists():
@@ -156,10 +161,15 @@ class FloatingBar(tk.Toplevel):
         self.mic_canvas.coords(self.mic_bar, 0, 0, bar_w, 14)
         self.mic_canvas.itemconfig(self.mic_bar, fill=color)
 
-    def get_screen_rect(self):
+    def _update_cached_rect(self):
         try:
-            if not self.winfo_exists():
-                return None
-            return (self.winfo_rootx(), self.winfo_rooty(), self.winfo_width(), self.winfo_height())
+            if self.winfo_exists():
+                self._cached_rect = (self.winfo_rootx(), self.winfo_rooty(), self.winfo_width(), self.winfo_height())
+            else:
+                self._cached_rect = None
         except Exception:
-            return None
+            self._cached_rect = None
+
+    def get_screen_rect(self):
+        """Thread-safe screen rect for background capture thread."""
+        return getattr(self, "_cached_rect", None)

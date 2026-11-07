@@ -112,10 +112,16 @@ class AudioManager:
                     def_rate = int(default_info.get("defaultSampleRate", sample_rate))
                     max_ch = min(2, default_info.get("maxInputChannels", 1))
                 else:
-                    info = self.pa.get_device_info_by_index(mic_index)
-                    mic_idx = mic_index
-                    def_rate = int(info.get("defaultSampleRate", sample_rate))
-                    max_ch = min(2, info.get("maxInputChannels", 1))
+                    try:
+                        info = self.pa.get_device_info_by_index(mic_index)
+                        mic_idx = mic_index
+                        def_rate = int(info.get("defaultSampleRate", sample_rate))
+                        max_ch = min(2, info.get("maxInputChannels", 1))
+                    except Exception:
+                        default_info = self.pa.get_default_input_device_info()
+                        mic_idx = default_info["index"]
+                        def_rate = int(default_info.get("defaultSampleRate", sample_rate))
+                        max_ch = min(2, default_info.get("maxInputChannels", 1))
 
                 try:
                     self.mic_stream = self.pa.open(
@@ -154,10 +160,16 @@ class AudioManager:
                     spk_ch = int(spk_info.get("maxInputChannels", 2))
                     spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
                 else:
-                    spk_info = self.pa.get_device_info_by_index(speaker_index)
-                    spk_idx = speaker_index
-                    spk_ch = int(spk_info.get("maxInputChannels", 2))
-                    spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
+                    try:
+                        spk_info = self.pa.get_device_info_by_index(speaker_index)
+                        spk_idx = speaker_index
+                        spk_ch = int(spk_info.get("maxInputChannels", 2))
+                        spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
+                    except Exception:
+                        spk_info = self.pa.get_default_wasapi_loopback()
+                        spk_idx = spk_info["index"]
+                        spk_ch = int(spk_info.get("maxInputChannels", 2))
+                        spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
 
                 try:
                     self.spk_stream = self.pa.open(
@@ -209,6 +221,13 @@ class AudioManager:
         vol = getattr(self, "volume", 1.0)
 
         def process_raw_chunk(raw, in_channels, in_rate, volume_boost=1.0):
+            if not raw:
+                return None
+            # Ensure byte count aligns to full frame boundaries
+            frame_align = in_channels * 2
+            remainder = len(raw) % frame_align
+            if remainder > 0:
+                raw = raw[:-remainder]
             if not raw:
                 return None
             arr = np.frombuffer(raw, dtype=np.int16)
@@ -502,7 +521,7 @@ class AudioManager:
                 if vol != 1.0:
                     try:
                         arr = np.frombuffer(data, dtype=np.int16)
-                        data = np.clip(arr * vol, -32768, 32767).astype(np.int16).tobytes()
+                        data = np.clip(arr.astype(np.float32) * float(vol), -32768, 32767).astype(np.int16).tobytes()
                     except Exception:
                         pass
 
@@ -638,7 +657,7 @@ class AudioManager:
                     if volume != 1.0:
                         try:
                             arr = np.frombuffer(data, dtype=np.int16)
-                            data = np.clip(arr * volume, -32768, 32767).astype(np.int16).tobytes()
+                            data = np.clip(arr.astype(np.float32) * float(volume), -32768, 32767).astype(np.int16).tobytes()
                         except Exception:
                             pass
                     frames.append(data)

@@ -156,7 +156,7 @@ class LibraryWindow(ctk.CTkToplevel):
 
     def _locate_file(self, path: Path):
         try:
-            subprocess.run(["explorer", f"/select,{path}"])
+            subprocess.Popen(f'explorer /select,"{path}"')
         except Exception:
             try:
                 os.startfile(str(path.parent))
