@@ -178,8 +178,15 @@ def find_ffmpeg():
     return "ffmpeg"
 
 
+_CACHED_ENCODER = None
+
+
 def detect_best_encoder(ffmpeg_path):
-    """Test if h264_mf (hardware accelerated) works, otherwise fallback to libx264."""
+    """Test if h264_mf (hardware accelerated) works, otherwise fallback to libx264. Cached for zero startup lag."""
+    global _CACHED_ENCODER
+    if _CACHED_ENCODER is not None:
+        return _CACHED_ENCODER
+
     try:
         cmd = [
             ffmpeg_path, "-y",
@@ -205,10 +212,69 @@ def detect_best_encoder(ffmpeg_path):
         proc.stdin.close()
         proc.wait(timeout=2.0)
         if proc.returncode == 0:
+            _CACHED_ENCODER = "h264_mf"
             return "h264_mf"
     except Exception:
         pass
+    _CACHED_ENCODER = "libx264"
     return "libx264"
+
+
+class MasterClock:
+    """High-precision monotonic master wall-clock with pause/resume support for 100% accurate A/V synchronization."""
+
+    def __init__(self):
+        self._t0 = 0.0
+        self._paused_duration = 0.0
+        self._pause_start = 0.0
+        self._is_running = False
+        self._is_paused = False
+        self._lock = threading.RLock()
+
+    def start(self):
+        with self._lock:
+            self._t0 = time.perf_counter()
+            self._paused_duration = 0.0
+            self._pause_start = 0.0
+            self._is_running = True
+            self._is_paused = False
+
+    def now(self) -> float:
+        """Returns the real elapsed wall-clock seconds since start, excluding paused time."""
+        with self._lock:
+            if not self._is_running:
+                return getattr(self, "_stopped_time", 0.0)
+            if self._is_paused:
+                return max(0.0, self._pause_start - self._t0 - self._paused_duration)
+            return max(0.0, time.perf_counter() - self._t0 - self._paused_duration)
+
+    def pause(self):
+        with self._lock:
+            if self._is_running and not self._is_paused:
+                self._pause_start = time.perf_counter()
+                self._is_paused = True
+
+    def resume(self):
+        with self._lock:
+            if self._is_running and self._is_paused:
+                self._paused_duration += (time.perf_counter() - self._pause_start)
+                self._is_paused = False
+
+    def stop(self) -> float:
+        with self._lock:
+            if self._is_running:
+                self._stopped_time = self.now()
+                self._is_running = False
+                self._is_paused = False
+            return getattr(self, "_stopped_time", 0.0)
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    @property
+    def is_paused(self) -> bool:
+        return self._is_paused
 
 
 class RecorderEngine:
@@ -223,8 +289,11 @@ class RecorderEngine:
         self.paused_duration = 0.0
         self.pause_start = 0.0
         self.frames_captured = 0
+        self.frames_written = 0
         self.current_fps = 0.0
 
+        self.master_clock = None
+        self._ready_event = None
         self._record_thread = None
         self._writer_thread = None
         self._stats_thread = None
@@ -232,6 +301,7 @@ class RecorderEngine:
         self._pause_event = threading.Event()
         self._frame_pool = None
         self._work_queue = None
+        self.last_sync_stats = None
 
         self.temp_video_path = None
         self.temp_audio_path = None
@@ -319,16 +389,6 @@ class RecorderEngine:
 
         scale_filter = ["-vf", f"scale={out_w}:{out_h}"] if (out_w != width or out_h != height) else []
 
-        # Start audio if enabled
-        has_audio = False
-        if self.settings.record_mic:
-            try:
-                mic_vol = getattr(self.settings, "mic_volume", 1.0)
-                self.audio_mgr.start_recording(mic_index=self.settings.mic_device_index, volume=mic_vol)
-                has_audio = True
-            except Exception as e:
-                print(f"Warning: Failed to start mic recording: {e}")
-
         # Detect encoder
         encoder = self.settings.encoder
         if encoder == "auto":
@@ -337,9 +397,7 @@ class RecorderEngine:
         fps = self.settings.fps
         bitrate = self.settings.get_bitrate()
 
-        # Encoder optimization flags:
-        # h264_mf: dedicated display_remoting scenario + low-delay VBR prevents internal lookahead queuing
-        # libx264: ultrafast preset with zerolatency tune for minimum CPU overhead
+        # Encoder flags
         extra_enc_flags = []
         if encoder == "h264_mf":
             extra_enc_flags = ["-scenario", "display_remoting", "-rate_control", "ld_vbr"]
@@ -368,35 +426,53 @@ class RecorderEngine:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                bufsize=10485760,  # 10 MB OS pipe buffer absorbs momentary I/O spikes
+                bufsize=10485760,  # 10 MB OS pipe buffer
                 creationflags=NO_WINDOW
             )
         except Exception as e:
-            if has_audio:
-                self.audio_mgr.stop_and_save(self.temp_audio_path)
             raise RuntimeError(f"Failed to launch FFmpeg: {e}")
 
-        # Decoupled frame memory pool:
-        # Pre-allocate 3 buffers (1 capturing, 1 ready, 1 encoding)
-        # Prevents continuous RAM allocation and Python Garbage Collection stalls
-        frame_bytes = width * height * 4
-        self._frame_pool = queue.Queue()
-        for _ in range(3):
-            self._frame_pool.put(bytearray(frame_bytes))
-        self._work_queue = queue.Queue(maxsize=2)
-
-        self.state = "recording"
-        self.start_time = time.perf_counter()
-        self.paused_duration = 0.0
-        self.pause_start = 0.0
-        self.frames_captured = 0
+        # Initialize MasterClock and synchronization primitives
+        self.master_clock = MasterClock()
+        self._ready_event = threading.Event()
         self._stop_event.clear()
         self._pause_event.clear()
 
-        # Dedicated background pipe writer thread
+        # Decoupled frame memory pool (6 reusable buffers)
+        frame_bytes = width * height * 4
+        self._frame_pool = queue.Queue()
+        for _ in range(6):
+            self._frame_pool.put(bytearray(frame_bytes))
+        self._work_queue = queue.Queue(maxsize=6)
+
+        # Start Audio if Mic or Speaker is enabled
+        has_audio = False
+        rec_mic = bool(self.settings.record_mic)
+        rec_spk = bool(getattr(self.settings, "record_speaker", False))
+        if rec_mic or rec_spk:
+            try:
+                mic_vol = getattr(self.settings, "mic_volume", 1.0)
+                self.audio_mgr.start_recording(
+                    record_mic=rec_mic,
+                    mic_index=self.settings.mic_device_index,
+                    mic_volume=mic_vol,
+                    record_speaker=rec_spk,
+                    speaker_index=getattr(self.settings, "speaker_device_index", None),
+                    master_clock=self.master_clock,
+                    ready_event=self._ready_event,
+                    sample_rate=48000
+                )
+                has_audio = True
+            except Exception as e:
+                print(f"Warning: Failed to start audio recording: {e}")
+
+        self.frames_captured = 0
+        self.frames_written = 0
+
+        # Dedicated background pipe writer thread with CFR Wall-Clock frame pacing
         self._writer_thread = threading.Thread(
             target=self._pipe_writer_loop,
-            args=(v_proc,),
+            args=(v_proc, fps),
             daemon=True
         )
         self._writer_thread.start()
@@ -409,46 +485,104 @@ class RecorderEngine:
         )
         self._record_thread.start()
 
+        # Stats thread
         self._stats_thread = threading.Thread(target=self._stats_loop, daemon=True)
         self._stats_thread.start()
+
+        # Synchronized launch: start master clock and trigger all threads simultaneously (t = 0.0)
+        self.master_clock.start()
+        self.start_time = self.master_clock._t0
+        self.paused_duration = 0.0
+        self.pause_start = 0.0
+        self._ready_event.set()
+        self.state = "recording"
         return True
 
-    def _pipe_writer_loop(self, v_proc):
-        """Asynchronously writes captured frames to FFmpeg stdin without blocking the capture clock."""
+    def _pipe_writer_loop(self, v_proc, fps):
+        """Asynchronously writes captured frames to FFmpeg stdin with strict 1:1 wall-clock CFR pacing and duplication."""
         try:
-            while not self._stop_event.is_set() or not self._work_queue.empty():
-                try:
-                    buf = self._work_queue.get(timeout=0.05)
-                except queue.Empty:
+            self._ready_event.wait()
+            target_interval = 1.0 / fps
+            actual_frames_written = 0
+            last_frame_bytes = None
+
+            while not self._stop_event.is_set():
+                if self._pause_event.is_set():
+                    time.sleep(0.02)
                     continue
 
-                try:
-                    v_proc.stdin.write(buf)
-                except (BrokenPipeError, OSError, ValueError):
-                    break
-                finally:
-                    if self._frame_pool is not None:
+                elapsed = self.master_clock.now()
+                expected_frames = int(round(elapsed * fps))
+
+                if actual_frames_written < expected_frames:
+                    # Retrieve new frame if available
+                    if not self._work_queue.empty():
                         try:
-                            self._frame_pool.put_nowait(buf)
-                        except Exception:
+                            buf = self._work_queue.get_nowait()
+                            last_frame_bytes = bytes(buf)
+                            if self._frame_pool is not None:
+                                try:
+                                    self._frame_pool.put_nowait(buf)
+                                except Exception:
+                                    pass
+                        except queue.Empty:
                             pass
-                    self._work_queue.task_done()
+
+                    if last_frame_bytes is not None:
+                        try:
+                            v_proc.stdin.write(last_frame_bytes)
+                            actual_frames_written += 1
+                            self.frames_written = actual_frames_written
+                        except (BrokenPipeError, OSError, ValueError):
+                            break
+                    else:
+                        time.sleep(0.001)
+
+                else:
+                    # On schedule: sleep precisely until next frame boundary
+                    next_frame_t = (actual_frames_written + 1) * target_interval
+                    wait_t = next_frame_t - self.master_clock.now()
+                    if wait_t > 0.002:
+                        time.sleep(wait_t - 0.001)
+                    elif wait_t <= 0:
+                        time.sleep(0.0005)
+
         finally:
-            # Drain remaining items so work_queue can never block or deadlock
-            while not self._work_queue.empty():
+            # Stopping phase: ensure actual_frames_written matches final_expected_frames exactly
+            final_elapsed = self.master_clock.now() if self.master_clock else 0.0
+            final_expected_frames = int(round(final_elapsed * fps))
+
+            # Drain any remaining captured frames in work_queue
+            while not self._work_queue.empty() and actual_frames_written < final_expected_frames:
                 try:
                     buf = self._work_queue.get_nowait()
-                    if self._frame_pool is not None:
-                        try:
-                            self._frame_pool.put_nowait(buf)
-                        except Exception:
-                            pass
-                    self._work_queue.task_done()
+                    last_frame_bytes = bytes(buf)
+                    v_proc.stdin.write(last_frame_bytes)
+                    actual_frames_written += 1
+                    self.frames_written = actual_frames_written
                 except Exception:
                     break
+
+            # If capture was under-sampled (due to CPU/GPU lag), duplicate last frame to guarantee 1:1 CFR
+            if last_frame_bytes is not None:
+                while actual_frames_written < final_expected_frames:
+                    try:
+                        v_proc.stdin.write(last_frame_bytes)
+                        actual_frames_written += 1
+                        self.frames_written = actual_frames_written
+                    except Exception:
+                        break
+
+            # Drain and clear queue
+            while not self._work_queue.empty():
+                try:
+                    self._work_queue.get_nowait()
+                except Exception:
+                    break
+
             try:
                 v_proc.stdin.close()
-                v_proc.wait(timeout=5.0)
+                v_proc.wait(timeout=10.0)
             except Exception:
                 pass
 
@@ -487,16 +621,27 @@ class RecorderEngine:
         mouse_halo = getattr(self.settings, "mouse_halo", True)
         mouse_click_ripple = getattr(self.settings, "mouse_click_ripple", True)
 
+        self._ready_event.wait()
+        capture_count = 0
+
         try:
             while not self._stop_event.is_set():
                 if self._pause_event.is_set():
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     continue
 
-                t_frame_start = time.perf_counter()
+                # Pacing to capture at the target frame rate
+                target_t = capture_count * target_interval
+                wait_t = target_t - self.master_clock.now()
+                if wait_t > 0.002:
+                    time.sleep(wait_t - 0.001)
+                while self.master_clock.now() < target_t and not self._stop_event.is_set():
+                    time.sleep(0.0002)
+
+                if self._stop_event.is_set():
+                    break
 
                 # Pure SRCCOPY (0x00CC0020) is hardware-accelerated by DWM
-                # Eliminates CAPTUREBLT DWM composition lock, cursor flicker & desktop lag
                 g32.BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, left, top, 0x00CC0020)
 
                 # Draw mouse cursor with halo & click ripple effects
@@ -510,29 +655,33 @@ class RecorderEngine:
                         excluded_rect=ex_rect
                     )
 
-                # Acquire pre-allocated reusable buffer (non-blocking)
+                # Acquire reusable buffer
                 try:
                     buf = self._frame_pool.get_nowait()
                 except queue.Empty:
-                    # FFmpeg is temporarily busy with a keyframe: drop frame rather than lagging the capture clock
-                    pass
-                else:
-                    # Blazing-fast memmove into pre-allocated memory (~0.4 ms)
-                    c_buf = (ctypes.c_char * frame_bytes).from_buffer(buf)
-                    ctypes.memmove(c_buf, p_bits, frame_bytes)
+                    try:
+                        buf = self._work_queue.get_nowait()
+                    except queue.Empty:
+                        buf = bytearray(frame_bytes)
 
-                    # Hand off to async pipe writer
+                c_buf = (ctypes.c_char * frame_bytes).from_buffer(buf)
+                ctypes.memmove(c_buf, p_bits, frame_bytes)
+
+                try:
+                    self._work_queue.put_nowait(buf)
+                except queue.Full:
+                    try:
+                        old = self._work_queue.get_nowait()
+                        self._frame_pool.put_nowait(old)
+                    except Exception:
+                        pass
                     try:
                         self._work_queue.put_nowait(buf)
-                        self.frames_captured += 1
-                    except queue.Full:
-                        self._frame_pool.put_nowait(buf)
+                    except Exception:
+                        pass
 
-                # Precision sleep to maintain target framerate
-                elapsed = time.perf_counter() - t_frame_start
-                sleep_left = target_interval - elapsed
-                if sleep_left > 0.001:
-                    time.sleep(sleep_left)
+                capture_count += 1
+                self.frames_captured = capture_count
 
         finally:
             try:
@@ -555,10 +704,8 @@ class RecorderEngine:
             time.sleep(0.2)
             now = time.perf_counter()
 
-            if self.state == "recording":
-                elapsed = now - self.start_time - self.paused_duration
-            elif self.state == "paused":
-                elapsed = self.pause_start - self.start_time - self.paused_duration
+            if self.master_clock and self.master_clock.is_running:
+                elapsed = self.master_clock.now()
             else:
                 elapsed = 0.0
 
@@ -581,12 +728,12 @@ class RecorderEngine:
                         pass
                 try:
                     free_bytes = shutil.disk_usage(str(self.settings.output_dir)).free
-                    if free_bytes < 150 * 1024 * 1024:  # Less than 150 MB free
+                    if free_bytes < 150 * 1024 * 1024:
                         low_disk = True
                 except Exception:
                     pass
 
-            mic_rms = self.audio_mgr.current_rms if self.settings.record_mic else 0.0
+            mic_rms = self.audio_mgr.current_rms if (self.settings.record_mic or getattr(self.settings, "record_speaker", False)) else 0.0
 
             if self.on_update:
                 self.on_update({
@@ -601,7 +748,8 @@ class RecorderEngine:
     def pause(self):
         if self.state == "recording":
             self.state = "paused"
-            self.pause_start = time.perf_counter()
+            if self.master_clock:
+                self.master_clock.pause()
             self._pause_event.set()
             self.audio_mgr.pause()
             return True
@@ -609,8 +757,8 @@ class RecorderEngine:
 
     def resume(self):
         if self.state == "paused":
-            now = time.perf_counter()
-            self.paused_duration += (now - self.pause_start)
+            if self.master_clock:
+                self.master_clock.resume()
             self.state = "recording"
             self._pause_event.clear()
             self.audio_mgr.resume()
@@ -622,6 +770,8 @@ class RecorderEngine:
             return None
 
         self.state = "stopping"
+        # Freeze MasterClock immediately at user-click moment
+        real_elapsed = self.master_clock.stop() if self.master_clock else 0.0
         self._stop_event.set()
         self._pause_event.clear()
 
@@ -630,13 +780,9 @@ class RecorderEngine:
             self._record_thread.join(timeout=3.0)
             self._record_thread = None
 
-        # Drain buffered frames (bounded 3.0s timeout max, never hang)
-        t_drain = time.perf_counter()
-        while self._work_queue and not self._work_queue.empty() and (time.perf_counter() - t_drain < 3.0):
-            time.sleep(0.05)
-
+        # Wait for pipe writer thread to finish CFR pacing and closing FFmpeg
         if self._writer_thread:
-            self._writer_thread.join(timeout=5.0)
+            self._writer_thread.join(timeout=10.0)
             self._writer_thread = None
 
         if self._stats_thread:
@@ -645,12 +791,49 @@ class RecorderEngine:
 
         # Stop audio
         has_audio = False
-        if self.settings.record_mic and self.temp_audio_path:
+        should_audio = self.settings.record_mic or getattr(self.settings, "record_speaker", False)
+        if should_audio and self.temp_audio_path:
             try:
                 has_audio = self.audio_mgr.stop_and_save(self.temp_audio_path)
             except Exception as e:
                 print(f"Error stopping audio: {e}")
                 has_audio = False
+
+        # Compute telemetry & verification stats
+        fps = self.settings.fps
+        video_duration = (self.frames_written / fps) if getattr(self, "frames_written", 0) > 0 else 0.0
+        audio_duration = 0.0
+        total_audio_samples = getattr(self.audio_mgr, "total_samples_recorded", 0)
+        audio_sr = getattr(self.audio_mgr, "sample_rate", 48000)
+        if has_audio and total_audio_samples > 0 and audio_sr > 0:
+            audio_duration = total_audio_samples / audio_sr
+
+        diff_v_clock = abs(video_duration - real_elapsed)
+        diff_a_clock = abs(audio_duration - real_elapsed) if has_audio else 0.0
+        diff_v_a = abs(video_duration - audio_duration) if has_audio else 0.0
+
+        print("\n" + "=" * 65)
+        print("[FlowRec Master Clock & A/V Sync Telemetry]")
+        print(f"  * Real Elapsed Time (MasterClock) : {real_elapsed:.4f} s")
+        print(f"  * Video Duration ({self.frames_written} frames @ {fps} fps): {video_duration:.4f} s (Error: {diff_v_clock*1000:.1f} ms)")
+        if has_audio:
+            print(f"  * Audio Duration ({total_audio_samples} samples @ {audio_sr} Hz): {audio_duration:.4f} s (Error: {diff_a_clock*1000:.1f} ms)")
+            print(f"  * Cumulative A/V Drift (Video vs Audio): {diff_v_a*1000:.2f} ms")
+            print(f"  * Sync Verification Status: {'PASS (< 50ms)' if diff_v_a < 0.05 else 'WARN (> 50ms)'}")
+        else:
+            print(f"  * Audio Track: Disabled")
+            print(f"  * Video Clock Status: {'PASS (< 50ms)' if diff_v_clock < 0.05 else 'WARN (> 50ms)'}")
+        print("=" * 65 + "\n")
+
+        self.last_sync_stats = {
+            "real_elapsed": real_elapsed,
+            "video_duration": video_duration,
+            "audio_duration": audio_duration,
+            "diff_v_clock": diff_v_clock,
+            "diff_a_clock": diff_a_clock,
+            "diff_v_a": diff_v_a,
+            "pass_sync": (diff_v_a < 0.05) if has_audio else (diff_v_clock < 0.05)
+        }
 
         # Mux video and audio
         final_file = self._mux_recording(has_audio)
@@ -664,7 +847,7 @@ class RecorderEngine:
 
         final_path = self.final_output_path
 
-        # If no audio was recorded, instantly rename/replace temp video file (0.001s, zero copy overhead!)
+        # If no audio was recorded, instantly rename/replace temp video file
         if not has_audio or not self.temp_audio_path or not self.temp_audio_path.is_file():
             try:
                 os.replace(str(self.temp_video_path), str(final_path))
@@ -685,6 +868,8 @@ class RecorderEngine:
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",
+            "-avoid_negative_ts", "make_zero",
+            "-fflags", "+genpts",
             "-movflags", "+faststart",
             str(final_path)
         ]

@@ -18,9 +18,18 @@ class AudioManager:
         self._stop_event = threading.Event()
         self.current_rms = 0.0  # Normalized 0.0 - 1.0 for UI VU meter
         self.frames = []
-        self.sample_rate = 44100
-        self.channels = 1
+        self.sample_rate = 48000
+        self.channels = 2
         self.stream = None
+        self.mic_stream = None
+        self.spk_stream = None
+        self.mic_channels = 1
+        self.spk_channels = 2
+        self.mic_rate = 48000
+        self.spk_rate = 48000
+        self.master_clock = None
+        self.ready_event = None
+        self.total_samples_recorded = 0
 
         # Live microphone test & monitor state
         self.is_testing = False
@@ -64,77 +73,269 @@ class AudioManager:
             pass
         return devices
 
-    def start_recording(self, mic_index=None, sample_rate=44100, volume=1.0):
+    def start_recording(
+        self,
+        mic_index=None,
+        sample_rate=48000,
+        volume=1.0,
+        mic_volume=None,
+        record_mic=True,
+        record_speaker=False,
+        speaker_index=None,
+        master_clock=None,
+        ready_event=None
+    ):
+        if mic_volume is not None:
+            volume = mic_volume
         self.stop_test_monitor()
         self.frames = []
         self.current_rms = 0.0
         self.paused = False
         self.volume = volume
         self._stop_event.clear()
+        self.sample_rate = sample_rate
+        self.channels = 2
+        self.master_clock = master_clock
+        self.ready_event = ready_event
+        self.total_samples_recorded = 0
+        self.mic_stream = None
+        self.spk_stream = None
+        self.stream = None
 
-        try:
-            if mic_index is None:
-                default_info = self.pa.get_default_input_device_info()
-                mic_index = default_info["index"]
-                self.sample_rate = int(default_info.get("defaultSampleRate", sample_rate))
-                self.channels = min(2, default_info.get("maxInputChannels", 1))
-            else:
-                info = self.pa.get_device_info_by_index(mic_index)
-                self.sample_rate = int(info.get("defaultSampleRate", sample_rate))
-                self.channels = min(2, info.get("maxInputChannels", 1))
+        opened_any = False
 
-            self.stream = self.pa.open(
-                format=pyaudio.paInt16,
-                channels=self.channels,
-                rate=self.sample_rate,
-                input=True,
-                input_device_index=mic_index,
-                frames_per_buffer=1024
-            )
-        except Exception as e:
-            self.stream = None
-            raise RuntimeError(f"Cannot initialize microphone: {e}")
+        if record_mic:
+            try:
+                if mic_index is None:
+                    default_info = self.pa.get_default_input_device_info()
+                    mic_idx = default_info["index"]
+                    def_rate = int(default_info.get("defaultSampleRate", sample_rate))
+                    max_ch = min(2, default_info.get("maxInputChannels", 1))
+                else:
+                    info = self.pa.get_device_info_by_index(mic_index)
+                    mic_idx = mic_index
+                    def_rate = int(info.get("defaultSampleRate", sample_rate))
+                    max_ch = min(2, info.get("maxInputChannels", 1))
+
+                try:
+                    self.mic_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=max_ch,
+                        rate=self.sample_rate,
+                        input=True,
+                        input_device_index=mic_idx,
+                        frames_per_buffer=1024
+                    )
+                    self.mic_rate = self.sample_rate
+                    self.mic_channels = max_ch
+                except Exception:
+                    self.mic_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=max_ch,
+                        rate=def_rate,
+                        input=True,
+                        input_device_index=mic_idx,
+                        frames_per_buffer=1024
+                    )
+                    self.mic_rate = def_rate
+                    self.mic_channels = max_ch
+
+                self.stream = self.mic_stream
+                opened_any = True
+            except Exception as e:
+                print(f"Warning: Failed to initialize microphone: {e}")
+                self.mic_stream = None
+
+        if record_speaker:
+            try:
+                if speaker_index is None:
+                    spk_info = self.pa.get_default_wasapi_loopback()
+                    spk_idx = spk_info["index"]
+                    spk_ch = min(2, spk_info.get("maxInputChannels", 2))
+                    spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
+                else:
+                    spk_info = self.pa.get_device_info_by_index(speaker_index)
+                    spk_idx = speaker_index
+                    spk_ch = min(2, spk_info.get("maxInputChannels", 2))
+                    spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
+
+                try:
+                    self.spk_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=spk_ch,
+                        rate=self.sample_rate,
+                        input=True,
+                        input_device_index=spk_idx,
+                        frames_per_buffer=1024
+                    )
+                    self.spk_rate = self.sample_rate
+                    self.spk_channels = spk_ch
+                except Exception:
+                    self.spk_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=spk_ch,
+                        rate=spk_def_rate,
+                        input=True,
+                        input_device_index=spk_idx,
+                        frames_per_buffer=1024
+                    )
+                    self.spk_rate = spk_def_rate
+                    self.spk_channels = spk_ch
+
+                if not self.stream:
+                    self.stream = self.spk_stream
+                opened_any = True
+            except Exception as e:
+                print(f"Warning: Failed to initialize speaker loopback: {e}")
+                self.spk_stream = None
+
+        if not opened_any:
+            raise RuntimeError("Cannot initialize any audio recording device (Mic or Speaker).")
 
         self.recording = True
         self._thread = threading.Thread(target=self._record_loop, daemon=True)
         self._thread.start()
+        return True
 
     def _record_loop(self):
-        chunk_count = 0
+        if self.ready_event:
+            self.ready_event.wait()
+
+        mic_buf = bytearray()
+        spk_buf = bytearray()
+        total_audio_samples = 0
+        RATE = self.sample_rate
+        BYTES_PER_STEREO_SAMPLE = 4
         vol = getattr(self, "volume", 1.0)
-        has_custom_vol = vol != 1.0
+
+        def process_raw_chunk(raw, in_channels, in_rate, volume_boost=1.0):
+            if not raw:
+                return None
+            arr = np.frombuffer(raw, dtype=np.int16)
+            if in_channels == 1:
+                arr = np.column_stack((arr, arr))
+            else:
+                arr = arr.reshape(-1, in_channels)[:, :2]
+
+            if in_rate != RATE and len(arr) > 1:
+                target_len = int(round(len(arr) * RATE / in_rate))
+                orig_idx = np.linspace(0, len(arr) - 1, len(arr))
+                new_idx = np.linspace(0, len(arr) - 1, target_len)
+                res = np.empty((target_len, 2), dtype=np.int16)
+                res[:, 0] = np.interp(new_idx, orig_idx, arr[:, 0]).astype(np.int16)
+                res[:, 1] = np.interp(new_idx, orig_idx, arr[:, 1]).astype(np.int16)
+                arr = res
+
+            if volume_boost != 1.0:
+                arr = np.clip(arr.astype(np.float32) * volume_boost, -32768, 32767).astype(np.int16)
+            return arr
 
         while not self._stop_event.is_set():
             if self.paused:
                 self.current_rms = 0.0
-                time.sleep(0.05)
+                time.sleep(0.02)
                 continue
-            try:
-                available = 0
+
+            if self.mic_stream:
                 try:
-                    available = self.stream.get_read_available()
+                    avail = self.mic_stream.get_read_available()
+                    if avail > 0:
+                        raw = self.mic_stream.read(avail, exception_on_overflow=False)
+                        arr = process_raw_chunk(raw, self.mic_channels, self.mic_rate, vol)
+                        if arr is not None and len(arr) > 0:
+                            mic_buf.extend(arr.tobytes())
                 except Exception:
                     pass
 
-                if available > 0:
-                    read_len = min(1024, available)
-                    data = self.stream.read(read_len, exception_on_overflow=False)
-                    if has_custom_vol:
-                        try:
-                            arr = np.frombuffer(data, dtype=np.int16)
-                            data = np.clip(arr * vol, -32768, 32767).astype(np.int16).tobytes()
-                        except Exception:
-                            pass
-                    self.frames.append(data)
+            if self.spk_stream:
+                try:
+                    avail = self.spk_stream.get_read_available()
+                    if avail > 0:
+                        raw = self.spk_stream.read(avail, exception_on_overflow=False)
+                        arr = process_raw_chunk(raw, self.spk_channels, self.spk_rate, 1.0)
+                        if arr is not None and len(arr) > 0:
+                            spk_buf.extend(arr.tobytes())
+                except Exception:
+                    pass
 
-                    chunk_count += 1
-                    if chunk_count % 4 == 0:
-                        self._calculate_rms_fast(data)
+            if self.master_clock:
+                elapsed = self.master_clock.now()
+                target_samples = int(round(elapsed * RATE))
+            else:
+                target_samples = total_audio_samples + 480
+
+            needed_samples = target_samples - total_audio_samples
+            if needed_samples >= 480:
+                bytes_needed = needed_samples * BYTES_PER_STEREO_SAMPLE
+
+                if self.mic_stream:
+                    if len(mic_buf) >= bytes_needed:
+                        m_chunk = bytes(mic_buf[:bytes_needed])
+                        del mic_buf[:bytes_needed]
+                    else:
+                        m_chunk = bytes(mic_buf) + (b"\x00" * (bytes_needed - len(mic_buf)))
+                        mic_buf.clear()
                 else:
-                    time.sleep(0.01)
-            except Exception:
-                break
-        self.current_rms = 0.0
+                    m_chunk = None
+
+                if self.spk_stream:
+                    if len(spk_buf) >= bytes_needed:
+                        s_chunk = bytes(spk_buf[:bytes_needed])
+                        del spk_buf[:bytes_needed]
+                    else:
+                        s_chunk = bytes(spk_buf) + (b"\x00" * (bytes_needed - len(spk_buf)))
+                        spk_buf.clear()
+                else:
+                    s_chunk = None
+
+                if m_chunk and s_chunk:
+                    arr_m = np.frombuffer(m_chunk, dtype=np.int16).astype(np.int32)
+                    arr_s = np.frombuffer(s_chunk, dtype=np.int16).astype(np.int32)
+                    out_chunk = np.clip(arr_m + arr_s, -32768, 32767).astype(np.int16).tobytes()
+                    self._calculate_rms_fast(m_chunk)
+                elif m_chunk:
+                    out_chunk = m_chunk
+                    self._calculate_rms_fast(m_chunk)
+                elif s_chunk:
+                    out_chunk = s_chunk
+                    self._calculate_rms_fast(s_chunk)
+                else:
+                    out_chunk = b"\x00" * bytes_needed
+
+                self.frames.append(out_chunk)
+                total_audio_samples += needed_samples
+                self.total_samples_recorded = total_audio_samples
+
+                max_slack = int(RATE * BYTES_PER_STEREO_SAMPLE * 0.04)
+                if len(mic_buf) > max_slack:
+                    del mic_buf[: len(mic_buf) - max_slack]
+                if len(spk_buf) > max_slack:
+                    del spk_buf[: len(spk_buf) - max_slack]
+            else:
+                time.sleep(0.005)
+
+        if self.master_clock:
+            final_elapsed = self.master_clock.now()
+            final_target = int(round(final_elapsed * RATE))
+            final_needed = final_target - total_audio_samples
+            if final_needed > 0:
+                bytes_needed = final_needed * BYTES_PER_STEREO_SAMPLE
+                if self.mic_stream and self.spk_stream:
+                    m = bytes(mic_buf[:bytes_needed]).ljust(bytes_needed, b"\x00")
+                    s = bytes(spk_buf[:bytes_needed]).ljust(bytes_needed, b"\x00")
+                    arr_m = np.frombuffer(m, dtype=np.int16).astype(np.int32)
+                    arr_s = np.frombuffer(s, dtype=np.int16).astype(np.int32)
+                    out_chunk = np.clip(arr_m + arr_s, -32768, 32767).astype(np.int16).tobytes()
+                elif self.mic_stream:
+                    out_chunk = bytes(mic_buf[:bytes_needed]).ljust(bytes_needed, b"\x00")
+                elif self.spk_stream:
+                    out_chunk = bytes(spk_buf[:bytes_needed]).ljust(bytes_needed, b"\x00")
+                else:
+                    out_chunk = b"\x00" * bytes_needed
+
+                self.frames.append(out_chunk)
+                total_audio_samples += final_needed
+                self.total_samples_recorded = total_audio_samples
 
     def _calculate_rms(self, data):
         """Public/test-compatible RMS calculation."""
@@ -168,20 +369,32 @@ class AudioManager:
     def stop_and_save(self, wav_path):
         self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=1.5)
+            self._thread.join(timeout=2.0)
             self._thread = None
 
-        if self.stream:
+        if self.mic_stream:
             try:
-                self.stream.stop_stream()
+                self.mic_stream.stop_stream()
             except Exception:
                 pass
             try:
-                self.stream.close()
+                self.mic_stream.close()
             except Exception:
                 pass
-            self.stream = None
+            self.mic_stream = None
 
+        if self.spk_stream:
+            try:
+                self.spk_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.spk_stream.close()
+            except Exception:
+                pass
+            self.spk_stream = None
+
+        self.stream = None
         self.recording = False
         self.paused = False
         self.current_rms = 0.0
@@ -194,7 +407,7 @@ class AudioManager:
             wav_path.parent.mkdir(parents=True, exist_ok=True)
             with wave.open(str(wav_path), "wb") as wf:
                 wf.setnchannels(self.channels)
-                wf.setsampwidth(2)  # paInt16
+                wf.setsampwidth(2)
                 wf.setframerate(self.sample_rate)
                 wf.writeframes(b"".join(self.frames))
             return wav_path.is_file() and wav_path.stat().st_size > 44
@@ -502,6 +715,18 @@ class AudioManager:
         self.stop_test_monitor()
         if self.recording:
             self.stop_and_save(Path.home() / "temp_abort.wav")
+        if self.mic_stream:
+            try:
+                self.mic_stream.close()
+            except Exception:
+                pass
+            self.mic_stream = None
+        if self.spk_stream:
+            try:
+                self.spk_stream.close()
+            except Exception:
+                pass
+            self.spk_stream = None
         try:
             self.pa.terminate()
         except Exception:

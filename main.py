@@ -463,6 +463,57 @@ class FlowRecApp(ctk.CTk):
         )
         self.chk_live_monitor.pack(side="left")
 
+        # Divider
+        div = ctk.CTkFrame(card, height=1, fg_color="#1f2937")
+        div.pack(fill="x", padx=16, pady=(4, 10))
+
+        # Title + Toggle for System Audio Loopback
+        spk_top_row = ctk.CTkFrame(card, fg_color="transparent")
+        spk_top_row.pack(fill="x", padx=16, pady=(0, 6))
+
+        ctk.CTkLabel(
+            spk_top_row, text="🔊 THU ÂM HỆ THỐNG / LOA (WASAPI LOOPBACK)",
+            font=("Segoe UI", 13, "bold"), text_color="#f8fafc"
+        ).pack(side="left")
+
+        self.switch_speaker = ctk.CTkSwitch(
+            spk_top_row, text="Bật Âm Thanh Loa",
+            command=self._on_speaker_switch_changed
+        )
+        if getattr(self.settings, "record_speaker", False):
+            self.switch_speaker.select()
+        else:
+            self.switch_speaker.deselect()
+        self.switch_speaker.pack(side="right")
+
+        # Speaker Device selector
+        spk_mid_row = ctk.CTkFrame(card, fg_color="transparent")
+        spk_mid_row.pack(fill="x", padx=16, pady=(2, 12))
+
+        ctk.CTkLabel(spk_mid_row, text="Thiết bị loa:", font=("Segoe UI", 12), text_color="#94a3b8").pack(side="left", padx=(0, 8))
+
+        speakers = self.engine.audio_mgr.list_speakers()
+        self.speaker_map = {s["name"]: s["index"] for s in speakers}
+        spk_options = list(self.speaker_map.keys()) if self.speaker_map else ["Loa mặc định hệ thống (Loopback)"]
+
+        self.combo_speaker = ctk.CTkComboBox(
+            spk_mid_row, values=spk_options,
+            command=self._on_speaker_device_changed,
+            height=30, corner_radius=8
+        )
+        self.combo_speaker.pack(side="left", fill="x", expand=True)
+        if spk_options:
+            saved_idx = getattr(self.settings, "speaker_device_index", None)
+            matched = False
+            if saved_idx is not None:
+                for name, idx in self.speaker_map.items():
+                    if idx == saved_idx:
+                        self.combo_speaker.set(name)
+                        matched = True
+                        break
+            if not matched:
+                self.combo_speaker.set(spk_options[0])
+
     def _build_capture_settings_card(self):
         card = ctk.CTkFrame(self.main_scroll, fg_color="#161e2e", corner_radius=14, border_width=1, border_color="#1f2937")
         card.pack(fill="x", padx=16, pady=6)
@@ -805,6 +856,15 @@ class FlowRecApp(ctk.CTk):
         self.settings.save()
         if self.engine.audio_mgr.is_testing:
             self.engine.audio_mgr.set_test_volume(self.settings.mic_volume)
+
+    def _on_speaker_switch_changed(self):
+        self.settings.record_speaker = bool(self.switch_speaker.get())
+        self.settings.save()
+
+    def _on_speaker_device_changed(self, choice):
+        if hasattr(self, "speaker_map") and choice in self.speaker_map:
+            self.settings.speaker_device_index = self.speaker_map[choice]
+            self.settings.save()
 
     def _on_area_mode_changed(self, choice):
         if choice == "Chọn vùng quay":

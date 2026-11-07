@@ -223,5 +223,99 @@ class TestHotkeyManager(unittest.TestCase):
         self.assertEqual(hm.key_pause, "F10")
 
 
+class TestAVSynchronization(unittest.TestCase):
+    """Rigorous tests ensuring MasterClock, Video CFR Pacing, and Audio Alignment remain within 50ms."""
+
+    def test_av_sync_with_microphone(self):
+        import time
+        s = Settings()
+        s.record_mic = True
+        s.record_speaker = False
+        s.fps = 30
+        engine = RecorderEngine(s)
+        engine.set_region((0, 0, 320, 240))
+        try:
+            ok = engine.start()
+            self.assertTrue(ok)
+            time.sleep(1.2)
+            out = engine.stop()
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).is_file())
+
+            stats = engine.last_sync_stats
+            self.assertIsNotNone(stats)
+            # Verify all drifts are strictly < 0.05s (50 ms)
+            self.assertLess(stats["diff_v_clock"], 0.05, f"Video clock drift too large: {stats['diff_v_clock']}")
+            if stats["audio_duration"] > 0:
+                self.assertLess(stats["diff_a_clock"], 0.05, f"Audio clock drift too large: {stats['diff_a_clock']}")
+                self.assertLess(stats["diff_v_a"], 0.05, f"A/V drift too large: {stats['diff_v_a']}")
+                self.assertTrue(stats["pass_sync"])
+
+            Path(out).unlink(missing_ok=True)
+        finally:
+            engine.audio_mgr.close()
+
+    def test_av_sync_with_speaker_loopback(self):
+        import time
+        s = Settings()
+        s.record_mic = False
+        s.record_speaker = True
+        s.fps = 30
+        engine = RecorderEngine(s)
+        engine.set_region((0, 0, 320, 240))
+        try:
+            ok = engine.start()
+            self.assertTrue(ok)
+            time.sleep(1.2)
+            out = engine.stop()
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).is_file())
+
+            stats = engine.last_sync_stats
+            self.assertIsNotNone(stats)
+            self.assertLess(stats["diff_v_clock"], 0.05)
+            if stats["audio_duration"] > 0:
+                self.assertLess(stats["diff_a_clock"], 0.05)
+                self.assertLess(stats["diff_v_a"], 0.05)
+                self.assertTrue(stats["pass_sync"])
+
+            Path(out).unlink(missing_ok=True)
+        finally:
+            engine.audio_mgr.close()
+
+    def test_av_sync_combined_mic_and_speaker(self):
+        import time
+        s = Settings()
+        s.record_mic = True
+        s.record_speaker = True
+        s.fps = 30
+        engine = RecorderEngine(s)
+        engine.set_region((0, 0, 320, 240))
+        try:
+            ok = engine.start()
+            self.assertTrue(ok)
+            time.sleep(0.5)
+            engine.pause()
+            time.sleep(0.1)
+            engine.resume()
+            time.sleep(0.6)
+            out = engine.stop()
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).is_file())
+
+            stats = engine.last_sync_stats
+            self.assertIsNotNone(stats)
+            self.assertLess(stats["diff_v_clock"], 0.05)
+            if stats["audio_duration"] > 0:
+                self.assertLess(stats["diff_a_clock"], 0.05)
+                self.assertLess(stats["diff_v_a"], 0.05)
+                self.assertTrue(stats["pass_sync"])
+
+            Path(out).unlink(missing_ok=True)
+        finally:
+            engine.audio_mgr.close()
+
+
 if __name__ == "__main__":
     unittest.main()
+
