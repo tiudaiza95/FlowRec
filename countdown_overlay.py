@@ -66,6 +66,8 @@ class CountdownOverlay:
         _play_beep(880)
 
         def _tick():
+            if not self.root or not self.root.winfo_exists():
+                return
             self.count -= 1
             if self.count > 0:
                 _play_beep(880)

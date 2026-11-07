@@ -151,12 +151,12 @@ class AudioManager:
                 if speaker_index is None:
                     spk_info = self.pa.get_default_wasapi_loopback()
                     spk_idx = spk_info["index"]
-                    spk_ch = min(2, spk_info.get("maxInputChannels", 2))
+                    spk_ch = int(spk_info.get("maxInputChannels", 2))
                     spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
                 else:
                     spk_info = self.pa.get_device_info_by_index(speaker_index)
                     spk_idx = speaker_index
-                    spk_ch = min(2, spk_info.get("maxInputChannels", 2))
+                    spk_ch = int(spk_info.get("maxInputChannels", 2))
                     spk_def_rate = int(spk_info.get("defaultSampleRate", sample_rate))
 
                 try:
@@ -233,6 +233,23 @@ class AudioManager:
         while not self._stop_event.is_set():
             if self.paused:
                 self.current_rms = 0.0
+                # Drain hardware streams to prevent buffer overrun and stale audio leak during pause
+                if self.mic_stream:
+                    try:
+                        avail = self.mic_stream.get_read_available()
+                        if avail > 0:
+                            self.mic_stream.read(avail, exception_on_overflow=False)
+                    except Exception:
+                        pass
+                if self.spk_stream:
+                    try:
+                        avail = self.spk_stream.get_read_available()
+                        if avail > 0:
+                            self.spk_stream.read(avail, exception_on_overflow=False)
+                    except Exception:
+                        pass
+                mic_buf.clear()
+                spk_buf.clear()
                 time.sleep(0.02)
                 continue
 
@@ -306,7 +323,7 @@ class AudioManager:
                 total_audio_samples += needed_samples
                 self.total_samples_recorded = total_audio_samples
 
-                max_slack = int(RATE * BYTES_PER_STEREO_SAMPLE * 0.04)
+                max_slack = int(RATE * BYTES_PER_STEREO_SAMPLE * 0.40)
                 if len(mic_buf) > max_slack:
                     del mic_buf[: len(mic_buf) - max_slack]
                 if len(spk_buf) > max_slack:

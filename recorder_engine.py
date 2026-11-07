@@ -417,6 +417,7 @@ class RecorderEngine:
             *extra_enc_flags,
             "-b:v", bitrate,
             "-pix_fmt", "nv12" if encoder == "h264_mf" else "yuv420p",
+            "-movflags", "+faststart",
             str(self.temp_video_path)
         ]
 
@@ -635,11 +636,14 @@ class RecorderEngine:
                 wait_t = target_t - self.master_clock.now()
                 if wait_t > 0.002:
                     time.sleep(wait_t - 0.001)
-                while self.master_clock.now() < target_t and not self._stop_event.is_set():
-                    time.sleep(0.0002)
+                while self.master_clock.now() < target_t and not self._stop_event.is_set() and not self._pause_event.is_set():
+                    time.sleep(0.0005)
 
                 if self._stop_event.is_set():
                     break
+                if self._pause_event.is_set():
+                    time.sleep(0.02)
+                    continue
 
                 # Pure SRCCOPY (0x00CC0020) is hardware-accelerated by DWM
                 g32.BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, left, top, 0x00CC0020)

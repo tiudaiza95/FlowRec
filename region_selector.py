@@ -66,6 +66,8 @@ class RegionSelector:
     def _on_press(self, event):
         self.start_x = event.x
         self.start_y = event.y
+        self.start_x_root = event.x_root
+        self.start_y_root = event.y_root
         if self.rect_id:
             self.canvas.delete(self.rect_id)
         if self.label_id:
@@ -88,11 +90,13 @@ class RegionSelector:
         self.canvas.itemconfig(self.label_id, text=f"{w} x {h}")
 
     def _on_release(self, event):
-        end_x, end_y = event.x, event.y
-        left = min(self.start_x, end_x)
-        top = min(self.start_y, end_y)
-        width = abs(end_x - self.start_x)
-        height = abs(end_y - self.start_y)
+        end_x_root, end_y_root = event.x_root, event.y_root
+        start_x_root = getattr(self, "start_x_root", event.x)
+        start_y_root = getattr(self, "start_y_root", event.y)
+        left = min(start_x_root, end_x_root)
+        top = min(start_y_root, end_y_root)
+        width = abs(end_x_root - start_x_root)
+        height = abs(end_y_root - start_y_root)
 
         # Enforce even dimensions required by H.264 video encoders
         width = (width // 2) * 2

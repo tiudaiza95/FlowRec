@@ -316,6 +316,49 @@ class TestAVSynchronization(unittest.TestCase):
             engine.audio_mgr.close()
 
 
+    def test_pause_resume_long_pacing(self):
+        import time
+        s = Settings()
+        s.record_mic = True
+        s.record_speaker = True
+        s.fps = 30
+        engine = RecorderEngine(s)
+        engine.set_region((0, 0, 320, 240))
+        try:
+            ok = engine.start()
+            self.assertTrue(ok)
+            time.sleep(0.4)
+            engine.pause()
+            time.sleep(0.8)
+            engine.resume()
+            time.sleep(0.4)
+            out = engine.stop()
+            self.assertIsNotNone(out)
+            self.assertTrue(Path(out).is_file())
+            stats = engine.last_sync_stats
+            self.assertLess(stats["diff_v_clock"], 0.05)
+            if stats["audio_duration"] > 0:
+                self.assertLess(stats["diff_v_a"], 0.05)
+            Path(out).unlink(missing_ok=True)
+        finally:
+            engine.audio_mgr.close()
+
+    def test_countdown_safe_cancel(self):
+        import tkinter as tk
+        from countdown_overlay import CountdownOverlay
+        root = tk.Tk()
+        root.withdraw()
+        cancelled = []
+        try:
+            cd = CountdownOverlay(seconds=3, on_cancel=lambda: cancelled.append(True), parent=root)
+            cd.start()
+            cd._cancel()
+            self.assertTrue(cancelled[0])
+            self.assertIsNone(cd.root)
+        finally:
+            root.destroy()
+
+
 if __name__ == "__main__":
     unittest.main()
 
